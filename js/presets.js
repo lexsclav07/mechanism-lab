@@ -157,10 +157,71 @@
     return s;
   }
 
+  // F1 front suspension, seen from the front, on a shaker rig like the ones teams test on.
+  // Each corner is a double wishbone (short upper arm, long lower arm, both weightless links).
+  // A pushrod runs from the bottom of the upright up to a rocker on the chassis shoulder, and
+  // the rocker works an inboard spring k and damper c. The left tyre is pinned to its pad and
+  // the right one rolls on its pad (pin and roller supports), so the tyres can scrub sideways as
+  // the wishbones swing. The posts shake left and right at different rates: heave and roll.
+  const K_F1 = 20000, C_F1 = 500; // spring N/m and damper N·s/m at the units (the rocker multiplies them)
+  function f1Suspension() {
+    const s = M.newScene();
+    s.settings.air = 0; s.settings.substeps = 200; // kilonewton loads through light links: worth the accuracy
+    // monocoque cross-section, with a post on top for the inboard spring and damper mounts
+    const mono = [[-0.26, -0.08], [0.26, -0.08], [0.22, -0.62], [0.12, -0.8], [0.04, -0.8], [0.04, -1.07], [-0.04, -1.07], [-0.04, -0.8], [-0.12, -0.8], [-0.22, -0.62]];
+    const cen = P.polyCentroid(mono);
+    const chassis = M.addBody(s, { kind: 'poly', x: cen[0], y: cen[1], pts: mono.map(([x, y]) => [x - cen[0], y - cen[1]]), mass: 300, label: 'M_s' });
+    for (const sd of [-1, 1]) {
+      const X = (x) => sd * x, left = sd < 0;
+      const tyre = M.addBody(s, { kind: 'box', x: X(0.8), y: -0.36, w: 0.3, h: 0.72, mass: 30, color: 'dark', label: left ? 'm_u' : '' });
+      const pad = M.addBody(s, { kind: 'box', x: X(0.8), y: 0.03, w: 0.44, h: 0.06, mass: 20, color: 'light' });
+      M.addJoint(s, { kind: 'slider', a: ground(X(0.8), 0.03), b: { body: pad.id, x: 0, y: 0 }, dir: [0, -sd], limits: false, lo: -0.12, hi: 0.12 }); // guide drawn on the outside
+      M.addJoint(s, { kind: 'piston', a: ground(X(0.8), 0.62), b: { body: pad.id, x: 0, y: 0.03 }, min: 0.53, max: 0.59, len0: 0.56, speed: left ? 0.25 : 0.18, force: 30000, mode: 'cycle', phase: 1 });
+      if (left) M.addJoint(s, { kind: 'pivot', a: on(s, tyre, X(0.8), 0), b: on(s, pad, X(0.8), 0) });
+      else M.addJoint(s, { kind: 'slider', a: on(s, pad, X(0.8), 0), b: on(s, tyre, X(0.8), 0), dir: [1, 0], lock: false, limits: true, lo: -0.15, hi: 0.15 });
+      const uo = [X(0.7), -0.56], ui = [X(0.2), -0.5], lo = [X(0.7), -0.16], li = [X(0.2), -0.12];
+      const link = (p1, b1, p2, b2) => M.addJoint(s, { kind: 'rod', a: on(s, b1, ...p1), b: on(s, b2, ...p2), length: Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) });
+      link(ui, chassis, uo, tyre); // upper wishbone
+      link(li, chassis, lo, tyre); // lower wishbone
+      const piv = [X(0.2), -0.7], A = [X(0.32), -0.72], B = [X(0.27), -1.02], D = [X(0.249), -0.93];
+      const rc = P.polyCentroid([piv, A, B]);
+      const rocker = M.addBody(s, { kind: 'poly', x: rc[0], y: rc[1], pts: [piv, A, B].map(([x, y]) => [x - rc[0], y - rc[1]]), mass: 1.5, color: 'light' });
+      M.addJoint(s, { kind: 'pivot', a: on(s, rocker, ...piv), b: on(s, chassis, ...piv) });
+      link([X(0.66), -0.2], tyre, A, rocker); // pushrod
+      const ms = [X(0.04), -1.02], md = [X(0.04), -0.9];
+      M.addJoint(s, { kind: 'spring', a: on(s, rocker, ...B), b: on(s, chassis, ...ms), k: K_F1, c: 0, rest: Math.hypot(B[0] - ms[0], B[1] - ms[1]), coils: 7, label: left ? 'k' : '' });
+      M.addJoint(s, { kind: 'damper', a: on(s, rocker, ...D), b: on(s, chassis, ...md), c: C_F1, len0: Math.hypot(D[0] - md[0], D[1] - md[1]), label: left ? 'c' : '' });
+    }
+    return preload(s);
+  }
+
+  // Pre-load the springs so a car sits at its design ride height: hold the posts, let it settle,
+  // read each spring's force and build that in as pre-compression, then put the car back at its
+  // design pose. Three rounds gets it within a hundredth of a millimetre. The pistons keep the
+  // holding force they built up, so the car doesn't sag when you press Play.
+  function preload(s) {
+    P.index(s);
+    const design = s.bodies.map((b) => [b.x, b.y, b.a]);
+    const springs = s.joints.filter((j) => j.kind === 'spring'), designLen = springs.map((j) => P.jointLength(s, j));
+    const pistons = s.joints.filter((j) => j.kind === 'piston'), speeds = pistons.map((j) => j.speed);
+    pistons.forEach((j) => { j.speed = 0; });
+    const air = s.settings.air;
+    s.settings.air = 3; // heavy air drag just to settle quickly
+    for (let round = 0; round < 3; round++) {
+      for (let i = 0; i < 240; i++) P.step(s, 1 / 60);
+      springs.forEach((j, i) => { const F = j.k * (P.jointLength(s, j) - j.rest); j.rest = designLen[i] - F / j.k; });
+      s.bodies.forEach((b, i) => { [b.x, b.y, b.a] = design[i]; b.vx = b.vy = b.av = 0; });
+    }
+    pistons.forEach((j, i) => { j.speed = speeds[i]; j.phase = 1; });
+    s.settings.air = air; s.time = 0;
+    return s;
+  }
+
   ML.Presets = [
     { id: 'frame', name: 'The swinging frame', blurb: 'The mechanism from your video.', build: swingingFrame },
     { id: 'atwood', name: 'Atwood machine', blurb: 'Two masses on a pulley. The heavier one wins, slowly.', build: atwood },
     { id: 'suspension', name: 'Car suspension', blurb: 'A bumpy road, a spring and a damper. Set the damper to 0 to feel the difference.', build: suspension },
+    { id: 'f1', name: 'F1 front suspension', blurb: 'Double wishbones, pushrods and rockers on a shaker rig, like the ones F1 teams test on.', build: f1Suspension },
     { id: 'double', name: 'Double pendulum', blurb: 'Two rods, total chaos. Never swings the same way twice.', build: doublePendulum },
     { id: 'fourbar', name: 'Four-bar linkage', blurb: 'A motor turns the crank and the coupler draws a loop.', build: fourBar },
     { id: 'coupled', name: 'Coupled oscillators', blurb: 'Two blocks passing their energy back and forth through springs.', build: coupledOscillators },

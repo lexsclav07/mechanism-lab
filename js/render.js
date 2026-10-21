@@ -416,8 +416,11 @@
     const busy = scene.bodies.length + scene.joints.length > 30; // too many: only the selected part
     const show = (item) => !busy || item === ui.selected;
     const run = ui.running;
+    // with lots of rods (a suspension, a truss) their forces only show on the one you point at
+    const manyRods = scene.joints.filter((j) => j.kind === 'rod').length > 4;
     for (const j of scene.joints) {
       if (!show(j)) continue;
+      if (j.kind === 'rod' && manyRods && j !== ui.selected && j !== ui.hover) continue;
       if (j.kind === 'pulley') {
         if (!run || !j._f) continue;
         const c = ws(P.endWorld(scene, j.p));
