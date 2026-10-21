@@ -181,7 +181,7 @@
     const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys) - 0.3, Math.max(...ys) + 0.2];
     const top = 110, bottom = 110; // px taken by the top bar and the tray
     const availH = Math.max(120, V.H - top - bottom);
-    V.zoom = Math.min(2.2, Math.max(0.2, 0.92 * Math.min(V.W / ((x1 - x0 + 0.3) * 100), availH / ((y1 - y0 + 0.3) * 100))));
+    V.zoom = Math.min(3.5, Math.max(0.2, 0.92 * Math.min(V.W / ((x1 - x0 + 0.3) * 100), availH / ((y1 - y0 + 0.3) * 100))));
     V.cx = (x0 + x1) / 2;
     V.cy = (y0 + y1) / 2 - (top - bottom) / 2 / V.ppm();
   }

@@ -6,6 +6,8 @@ move with real forces and speeds in SI units (N, m/s, N·m, J).
 
 It started from a classic dynamics figure: a frame hung on two rods, a block sliding inside it
 between two springs, and a pendulum hanging off the block. That mechanism is the first example.
+Others include an Atwood machine, a quarter-car suspension, an F1 front suspension (double
+wishbones, pushrods and rockers on a shaker rig), a double pendulum and a four-bar linkage.
 
 ## Running it
 

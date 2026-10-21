@@ -288,11 +288,13 @@
   // machine feels it, and an overloaded actuator really stalls. "Whatever it takes" comes from a
   // PI controller: the P part reacts to the speed error, the I part removes any steady lag.
   // gain is the mass (or moment of inertia) being driven, so the response time is about T.
+  // j.integ (the I part) is saved with the scene: it's the force the actuator is already
+  // holding, so a loaded piston doesn't sag when you press Play or Reset.
   function drive(j, err, gain, max, h) {
     const T = 0.05, kp = 2 / T, ki = 1 / (T * T);
-    const u = gain * (kp * err + ki * (j._int || 0));
+    const u = gain * (kp * err + ki * (j.integ || 0));
     const out = Math.max(-max, Math.min(max, u));
-    if (out === u) j._int = (j._int || 0) + err * h; // don't wind up while maxed out
+    if (out === u) j.integ = (j.integ || 0) + err * h; // don't wind up while maxed out
     return out;
   }
 
@@ -314,8 +316,8 @@
     if (len < 1e-9) return;
     if (j.mode === 'extend') j.phase = 1;
     else if (j.mode === 'retract') j.phase = -1;
-    else if (j.phase > 0 && len >= j.max - 1e-3) { j.phase = -1; j._int = 0; }
-    else if (j.phase < 0 && len <= j.min + 1e-3) { j.phase = 1; j._int = 0; }
+    else if (j.phase > 0 && len >= j.max - 1e-3) j.phase = -1; // turning round doesn't change the load it holds
+    else if (j.phase < 0 && len <= j.min + 1e-3) j.phase = 1;
     const nx = dx / len, ny = dy / len, [r1x, r1y] = arm(A, p1), [r2x, r2y] = arm(B, p2);
     const v1 = A ? [A.vx - A.av * r1y, A.vy + A.av * r1x] : [0, 0], v2 = B ? [B.vx - B.av * r2y, B.vy + B.av * r2x] : [0, 0];
     const vlen = (v2[0] - v1[0]) * nx + (v2[1] - v1[1]) * ny;
