@@ -103,6 +103,80 @@ for (const id of ['fourbar', 'piston']) {
   check('hand pull (N)', hand._F, g, 0.05);
 }
 
+// Rods are parts. A real (not massless) rod swinging from one end: T = 2π√(2L/3g)
+const rodScene = (rods, joints, extra) => {
+  const s = scene([], [], extra);
+  s.nextId = 1;
+  for (const r of rods) M.addBody(s, Object.assign({ kind: 'bar', a: 0 }, r));
+  for (const j of joints) M.addJoint(s, j);
+  P.index(s);
+  return s;
+};
+{
+  const L = 1, th = 0.05, s = rodScene([{ x: (L / 2) * Math.sin(th), y: (L / 2) * Math.cos(th), a: Math.PI / 2 - th, L, mass: 1, ideal: false }],
+    [{ kind: 'pivot', a: { body: 1, x: -L / 2, y: 0 }, b: ground(0, 0) }]);
+  const crossings = []; let prev = s.bodies[0].x;
+  for (let i = 0; i < 1200; i++) { P.step(s, 1 / 60); const x = s.bodies[0].x; if (prev * x < 0) crossings.push(s.time); prev = x; }
+  const T = (crossings[crossings.length - 1] - crossings[0]) / ((crossings.length - 1) / 2);
+  check('rod swinging from one end, period (s)', T, +(2 * Math.PI * Math.sqrt((2 * L) / (3 * g))).toFixed(4), 0.005);
+}
+
+// Old weightless rods convert to rod parts that move exactly as before
+for (const pr of Presets) {
+  const raw = pr.build();
+  if (!raw.joints.some((j) => j.kind === 'rod')) continue;
+  const old = JSON.parse(M.serialize(raw)), mig = M.load(M.serialize(raw));
+  P.index(old);
+  let worst = 0;
+  for (let i = 0; i < 600; i++) {
+    P.step(old, 1 / 60); P.step(mig, 1 / 60);
+    for (const b of old.bodies) { const m = mig.bodies.find((x) => x.id === b.id); worst = Math.max(worst, Math.abs(b.x - m.x), Math.abs(b.y - m.y), Math.abs(b.a - m.a)); }
+  }
+  check(`"${pr.name}" converted rods move exactly as before (m)`, worst, 0, 0);
+}
+
+// Rods pinned end to end: a chain of three hanging from the ground keeps its pins together
+{
+  const s = rodScene([{ x: 0.5, y: 0, L: 1 }, { x: 1.5, y: 0, L: 1 }, { x: 2.5, y: 0, L: 1 }], [
+    { kind: 'pivot', a: { body: 1, x: -0.5, y: 0 }, b: ground(0, 0) },
+    { kind: 'pivot', a: { body: 1, x: 0.5, y: 0 }, b: { body: 2, x: -0.5, y: 0 } },
+    { kind: 'pivot', a: { body: 2, x: 0.5, y: 0 }, b: { body: 3, x: -0.5, y: 0 } }]);
+  let worst = 0;
+  for (let i = 0; i < 600; i++) {
+    P.step(s, 1 / 60);
+    for (const j of s.joints) { const a = P.endWorld(s, j.a), b = P.endWorld(s, j.b); worst = Math.max(worst, Math.hypot(b[0] - a[0], b[1] - a[1])); }
+  }
+  check('rod chain pin gap after 10 s (m)', worst, 0, 1e-4);
+  check('rod chain energy drift over 10 s (J, starts at 0)', P.energy(s).total, 0, 3);
+}
+
+// A motor on a light crank rod (0.1 kg) driving a 20 kg slider through a connecting rod
+{
+  const s = rodScene([{ x: 0.25, y: 0, L: 0.5, mass: 0.1 }, { x: 1.25, y: 0, L: 1.5, mass: 0.3 }], [
+    { kind: 'pivot', a: { body: 1, x: -0.25, y: 0 }, b: ground(0, 0), motor: 30, torque: 200 },
+    { kind: 'pivot', a: { body: 1, x: 0.25, y: 0 }, b: { body: 2, x: -0.75, y: 0 } }]);
+  const blk = M.addBody(s, { kind: 'box', x: 2, y: 0, w: 0.4, h: 0.3, mass: 20 });
+  M.addJoint(s, { kind: 'pivot', a: { body: 2, x: 0.75, y: 0 }, b: { body: blk.id, x: 0, y: 0 } });
+  M.addJoint(s, { kind: 'slider', a: ground(2, 0), b: { body: blk.id, x: 0, y: 0 }, dir: [1, 0], limits: false, lo: -1, hi: 1 });
+  P.index(s);
+  run(s, 1);
+  const a0 = s.bodies[0].a; run(s, 4);
+  check('motor crank on a 0.1 kg rod driving 20 kg (rpm)', (Math.abs(s.bodies[0].a - a0) / 4 / (2 * Math.PI)) * 60, 30, 1.5);
+}
+
+// Deleting the part at the middle of a shared pin re-pins the others to each other
+{
+  const s = rodScene([{ x: -0.5, y: 0, L: 1 }, { x: 0.5, y: 0, L: 1 }, { x: 0, y: 0.5, a: Math.PI / 2, L: 1 }], []);
+  const hub = M.addBody(s, { kind: 'disc', x: 0, y: 0, r: 0.05, mass: 1 });
+  for (const [id, x] of [[1, 0.5], [2, -0.5], [3, -0.5]]) M.addJoint(s, { kind: 'pivot', a: { body: hub.id, x: 0, y: 0 }, b: { body: id, x, y: 0 } });
+  M.remove(s, hub);
+  check('re-pinned members after deleting the hub (pins)', s.joints.length, 2, 0);
+  run(s, 1);
+  let gap = 0;
+  for (const j of s.joints) { const a = P.endWorld(s, j.a), b = P.endWorld(s, j.b); gap = Math.max(gap, Math.hypot(b[0] - a[0], b[1] - a[1])); }
+  check('re-pinned rods stay together (m)', gap, 0, 1e-4);
+}
+
 // Every preset runs 10 s with joints holding and nothing blowing up
 for (const pr of Presets) {
   const s = M.load(M.serialize(pr.build()));

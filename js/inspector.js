@@ -27,7 +27,9 @@
   // A setting: label, a number box (with its unit) and a slider underneath.
   // log = true for things that span decades (mass, stiffness, force). Each drag or edit is one undo step.
   // `toS`/`fromS` map between the stored value and the slider when they differ (weight).
-  function field({ id, label, unit = '', min, max, step = 0.01, log = false, get, set, ends, toS = (v) => v, fromS = (v) => v, disabled = false }) {
+  // apply: 'tweak' for settings (copied into the start state), 'change' when the edit moves or
+  // re-joins things (lengths, pins), which makes the current layout the new start state.
+  function field({ id, label, unit = '', min, max, step = 0.01, log = false, get, set, ends, toS = (v) => v, fromS = (v) => v, disabled = false, apply = 'tweak' }) {
     const item = A.S.selected;
     const toR = (v) => (log ? Math.log10(Math.max(v, min)) : v), fromR = (r) => (log ? 10 ** r : r);
     const box = h('input', { type: 'number', id, step: 'any', value: tidy(get()), inputmode: 'decimal', 'aria-label': `${label} (${unit})`, disabled });
@@ -39,13 +41,13 @@
       let v = fromR(parseFloat(range.value));
       v = log ? +v.toPrecision(2) : +(Math.round(v / step) * step).toFixed(6);
       begin(); set(fromS(v)); box.value = tidy(get());
-      A.tweak(item, { keepPanel: true });
+      apply === 'change' ? A.changed({ keepPanel: true }) : A.tweak(item, { keepPanel: true });
     });
     box.addEventListener('input', () => {
       const v = parseFloat(box.value);
       if (!Number.isFinite(v)) return;
       begin(); set(v); range.value = toR(toS(get()));
-      A.tweak(item, { keepPanel: true });
+      apply === 'change' ? A.changed({ keepPanel: true }) : A.tweak(item, { keepPanel: true });
     });
     for (const el of [range, box]) el.addEventListener('change', () => { began = false; });
     return h('div', { class: 'field' },
@@ -54,10 +56,10 @@
       ends ? h('div', { class: 'ends' }, h('span', {}, ends[0]), h('span', {}, ends[1])) : null);
   }
 
-  function toggle({ id, label, get, set }) {
+  function toggle({ id, label, get, set, apply = 'tweak' }) {
     const item = A.S.selected;
     const cb = h('input', { type: 'checkbox', id, role: 'switch', checked: !!get() });
-    cb.addEventListener('change', () => { A.checkpoint(); set(cb.checked); A.tweak(item); });
+    cb.addEventListener('change', () => { A.checkpoint(); set(cb.checked); apply === 'change' ? A.changed() : A.tweak(item); });
     return h('label', { class: 'switch', for: id }, h('span', {}, label), cb);
   }
 
@@ -87,7 +89,52 @@
 
   // ---------- bodies ----------
 
+  // A rod's length changes about its middle: things pinned at its ends stay at the ends, things
+  // along it keep their place (clamped to the new length). The mass follows if it was the default.
+  function setBarLength(b, L) {
+    const old = b.L;
+    for (const j of A.S.scene.joints) {
+      for (const k of ['a', 'b', 'p']) {
+        const e = j[k];
+        if (!e || e.body !== b.id) continue;
+        e.x = Math.abs(Math.abs(e.x) - old / 2) < 1e-6 ? Math.sign(e.x) * (L / 2) : Math.max(-L / 2, Math.min(L / 2, e.x));
+      }
+    }
+    if (Math.abs(b.mass - M.barMass(old)) < 1e-9) b.mass = M.barMass(L);
+    b.L = L;
+  }
+
+  function barCard(b) {
+    const scene = A.S.scene, g = () => scene.settings.gravity;
+    const speed = () => Math.hypot(b.vx, b.vy), red = !!b._red;
+    const heavy = Math.max(0, ...scene.joints.filter((j) => j.a.body === b.id || j.b.body === b.id)
+      .map((j) => P.bodyOf(scene, j.a.body === b.id ? j.b : j.a)).filter((o) => o && o.kind !== 'bar').map((o) => o.mass));
+    const kids = [
+      note(`${fmt(b.L)} m long · ${red ? 'massless' : `${fmt(b.mass)} kg`}`),
+      field({ id: 'i-len', label: 'Length', unit: 'm', min: 0.05, max: 10, get: () => b.L, set: (v) => setBarLength(b, Math.max(0.03, v)), apply: 'change' }),
+      toggle({ id: 'i-ideal', label: 'Massless (textbook rod)', get: () => b.ideal, set: (v) => (b.ideal = v) }),
+      note(!b.ideal ? 'Using its real mass.'
+        : red ? 'Weightless, like a textbook rod: it only joins two things at its ends.'
+          : `Can’t be massless right now (it has a free end, joins other rods, has something along it, or a motor), so it’s using its ${fmt(b.mass)} kg.`),
+      field({ id: 'i-mass', label: 'Mass', unit: 'kg', min: 0.01, max: 100, log: true, disabled: red, get: () => b.mass, set: (v) => (b.mass = Math.max(0.01, v)), ends: ['light', 'heavy'] }),
+    ];
+    if (!red && heavy / b.mass >= 500) kids.push(note(`Something pinned to it is ${fmt(heavy / b.mass, 0)}× heavier. Above about 500× the pins start to stretch a little; a heavier rod fixes it.`));
+    kids.push(
+      toggle({ id: 'i-fixed', label: 'Fixed in place', get: () => b.fixed, set: (v) => { b.fixed = v; b.vx = b.vy = b.av = 0; } }),
+      toggle({ id: 'i-trace', label: 'Draw its path', get: () => b.trace, set: (v) => { b.trace = v; if (!v) A.S.traces.delete(b.id); } }),
+      h('button', { type: 'button', class: 'btn', onclick: () => A.follow(A.S.follow && A.S.follow.body === b.id ? null : { body: b.id, x: 0, y: 0 }) },
+        A.S.follow && A.S.follow.body === b.id ? 'Stop following' : 'Follow with camera'),
+      liveBox(
+        stat('Force along it', () => { if (!running()) return 'press Play'; const F = P.barAxial(scene, b); return F == null ? 'n/a (pinned along it)' : pushPull(F); }),
+        stat('Speed', () => `${fmt(speed())} m/s`),
+        stat('Spin', () => `${fmt((b.av * 60) / (2 * Math.PI), 1)} rpm`),
+        stat('Kinetic energy', () => (red ? '0 J (massless)' : `${fmt(0.5 * b.mass * speed() ** 2 + 0.5 * (b._I || 0) * b.av * b.av)} J`)),
+        red ? null : stat('Weight force', () => `${fmt((b.gscale ?? 1) * b.mass * g(), 1)} N`)));
+    return kids;
+  }
+
   function bodyCard(b) {
+    if (b.kind === 'bar') return barCard(b);
     const g = () => A.S.scene.settings.gravity;
     const speed = () => Math.hypot(b.vx, b.vy);
     const size = b.kind === 'disc' ? `${fmt(b.r * 200, 0)} cm across` : b.kind === 'box' ? `${fmt(b.w)} m × ${fmt(b.h)} m` : `${fmt(P.shapeArea(b))} m²`;
@@ -165,6 +212,7 @@
     }
     if (j.kind === 'pivot') {
       const kids = [toggle({ id: 'i-motor-on', label: 'Motor', get: () => !!j.motor, set: (v) => { j.motor = v ? j._lastRpm || 30 : 0; if (!v) j._lastRpm = 0; } })];
+      kids.push(...pinShared(j));
       if (j.motor) {
         kids.push(
           field({ id: 'i-rpm', label: 'Speed', unit: 'rpm', min: -300, max: 300, step: 1, get: () => j.motor, set: (v) => { j.motor = v || 0.01; j._lastRpm = j.motor; }, ends: ['backwards', 'forwards'] }),
@@ -190,7 +238,7 @@
           stat('Going', () => (j.phase > 0 ? 'out' : 'in'))),
       ];
     }
-    if (j.kind === 'weld') return [note('Holds two parts together as one solid piece.'), liveBox(stat('Glue force', () => (running() ? `${fmt(Math.abs(j._f || 0), 1)} N` : 'press Play')))];
+    if (j.kind === 'weld') return [note('Holds two parts together as one solid piece.'), ...pinShared(j), liveBox(stat('Glue force', () => (running() ? `${fmt(Math.abs(j._f || 0), 1)} N` : 'press Play')))];
     if (j.kind === 'slider') {
       return [
         toggle({ id: 'i-limits', label: 'End stops', get: () => j.limits, set: (v) => (j.limits = v) }),
@@ -199,6 +247,17 @@
       ];
     }
     return [];
+  }
+
+  // For pins and glue: how many parts share it, and whether it's fixed to the ground.
+  function pinShared(j) {
+    const n = ML.Rods.nodeOf(j);
+    if (!n) return [];
+    const parts = n.members.filter((m) => m.body != null).length;
+    return [
+      parts > 2 ? note(`Shared by ${parts} parts.`) : null,
+      toggle({ id: 'i-grounded', label: 'Fixed to the ground', get: () => ML.Rods.isGrounded(j), set: (v) => ML.Rods.setGrounded(j, v), apply: 'change' }),
+    ].filter(Boolean);
   }
 
   function refresh() {

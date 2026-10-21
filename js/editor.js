@@ -2,7 +2,7 @@
 // Each tool reacts to down / move / up; the gesture in progress lives in `op`.
 (function () {
   const ML = (window.ML = window.ML || {});
-  const P = ML.Phys, R = ML.Render, M = ML.Model, V = R.View;
+  const P = ML.Phys, R = ML.Render, M = ML.Model, V = R.View, Rd = ML.Rods;
   let A, canvas;               // ML.App and the canvas, set in init()
   let op = null;               // gesture in progress
   let poly = [];               // corners placed so far with the Shape tool
@@ -18,10 +18,10 @@
     box: 'Drag on the board to draw a block, or tap for a standard one.',
     poly: 'Tap to place corners, then tap the first corner again (or double-tap) to finish the shape.',
     weight: 'Tap to drop a 1 kg weight. Drop it on something and it sticks to it.',
-    pivot: 'Tap where two parts overlap to pin them together. Tap a single part to pin it to the ground.',
+    pivot: 'Tap where parts overlap (rods crossing, rod ends meeting) to pin them together. Tap a single part to pin it to the ground.',
     motor: 'Tap where two parts overlap (or on one part) to add a motor there. Set its speed and torque in its card.',
     weld: 'Tap where two parts overlap to glue them into one piece.',
-    rod: 'Drag from one point to another for a stiff, weightless rod. An end in empty space is pinned to the ground.',
+    rod: 'Drag from point to point. Rods join other rods end to end, or anywhere along them. Next to a block or weight, an end in empty space is pinned to the ground; next to a rod it stays free.',
     rope: 'Drag from one point to another for a rope. It only pulls when it’s tight. Make it longer in its card to give it slack.',
     pulley: 'Tap where the wheel goes, then the first thing to tie on, then the second.',
     spring: 'Drag from one point to another. The spring starts at its relaxed length. An end in empty space hooks to a wall.',
@@ -33,17 +33,11 @@
 
   const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
   const roundMass = (m) => Math.max(0.1, Math.round(m * 10) / 10);
-  const tolW = () => 3 / V.ppm(); // 3 px expressed in metres
   const TWO_POINT = new Set(['rod', 'rope', 'spring', 'damper', 'piston']);
 
   // ---------- finding things under the pointer ----------
 
-  function bodiesAt(p, exceptId) {
-    const out = [];
-    const bs = A.S.scene.bodies;
-    for (let i = bs.length - 1; i >= 0; i--) if (bs[i].id !== exceptId && P.hitBody(bs[i], p[0], p[1], tolW())) out.push(bs[i]);
-    return out;
-  }
+  const bodiesAt = (p, exceptId) => Rd.partsAt(p, exceptId); // rods within 7 px, other parts within 3 px
 
   function segDist(p, a, b) {
     const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy || 1;
@@ -56,38 +50,34 @@
     return [[pA[0] + ux * j.lo, pA[1] + uy * j.lo], [pA[0] + ux * j.hi, pA[1] + uy * j.hi]];
   }
 
-  // Pins first, then pulleys, then rods / ropes / springs / dampers / pistons, then bodies, then
-  // slider rails (a rail runs right through its block, so it mustn't steal the block's clicks).
-  function pick(sx, sy) {
-    const scene = A.S.scene, s = [sx, sy];
+  // Everything under the pointer, in order: pins, pulleys, ropes / springs / dampers / pistons,
+  // rods, other parts (topmost first), then slider rails (a rail runs right through its block,
+  // so it mustn't steal the block's clicks).
+  function under(sx, sy) {
+    const scene = A.S.scene, s = [sx, sy], out = [];
     P.index(scene);
-    let best = null, bd = 9;
-    for (const j of scene.joints) {
-      if (j.kind !== 'pivot' && j.kind !== 'weld') continue;
-      const d = dist(s, R.ws(P.endWorld(scene, j.a)));
-      if (d < bd) { bd = d; best = j; }
-    }
-    if (best) return best;
-    for (const j of scene.joints) {
-      if (j.kind === 'pulley' && dist(s, R.ws(P.endWorld(scene, j.p))) < j.r * V.ppm() + 6) return j;
-    }
-    bd = 7;
-    for (const j of scene.joints) {
+    const nearest = (list, d) => list.map((x) => [x, d(x)]).filter(([, v]) => v != null).sort((p, q) => p[1] - q[1]).map(([x]) => x);
+    out.push(...nearest(scene.joints.filter((j) => j.kind === 'pivot' || j.kind === 'weld'), (j) => { const d = dist(s, R.ws(P.endWorld(scene, j.a))); return d < 9 ? d : null; }).slice(0, 1));
+    out.push(...scene.joints.filter((j) => j.kind === 'pulley' && dist(s, R.ws(P.endWorld(scene, j.p))) < j.r * V.ppm() + 6));
+    out.push(...nearest(scene.joints, (j) => {
       const segs = TWO_POINT.has(j.kind) ? [[j.a, j.b]] : j.kind === 'pulley' ? [[j.a, j.p], [j.p, j.b]] : [];
-      for (const [e1, e2] of segs) {
-        const d = segDist(s, R.ws(P.endWorld(scene, e1)), R.ws(P.endWorld(scene, e2)));
-        if (d < bd) { bd = d; best = j; }
-      }
-    }
-    if (best) return best;
-    const b = bodiesAt(V.s2w(sx, sy))[0];
-    if (b) return b;
-    for (const j of scene.joints) {
-      if (j.kind !== 'slider') continue;
-      const [e0, e1] = railEnds(scene, j);
-      if (segDist(s, R.ws(e0), R.ws(e1)) < 6) return j;
-    }
-    return null;
+      const d = Math.min(Infinity, ...segs.map(([e1, e2]) => segDist(s, R.ws(P.endWorld(scene, e1)), R.ws(P.endWorld(scene, e2)))));
+      return d < 7 ? d : null;
+    }).slice(0, 1));
+    const parts = bodiesAt(V.s2w(sx, sy));
+    out.push(...parts.filter((b) => b.kind === 'bar'), ...parts.filter((b) => b.kind !== 'bar'));
+    out.push(...scene.joints.filter((j) => { if (j.kind !== 'slider') return false; const [e0, e1] = railEnds(scene, j); return segDist(s, R.ws(e0), R.ws(e1)) < 6; }));
+    return out.filter((x, i) => out.indexOf(x) === i);
+  }
+
+  let lastTap = null;
+  function pick(sx, sy, cycle = false) {
+    const list = under(sx, sy);
+    if (!cycle) return list[0] || null;
+    const now = performance.now(), again = lastTap && now - lastTap.t < 1000 && dist(lastTap.s, [sx, sy]) < 6;
+    const i = again && list.length ? (lastTap.i + 1) % list.length : 0;
+    lastTap = { t: now, s: [sx, sy], i };
+    return list[i] || null;
   }
 
   // Ground anchors under the pointer: every joint end pinned to the ground at that spot
@@ -125,6 +115,7 @@
       } else if (b.kind === 'poly') for (const [lx, ly] of b.pts) consider(P.toWorld(b, lx, ly));
     }
     for (const j of scene.joints) for (const [, p] of R.jointHandles(scene, j)) consider(p);
+    for (const p of Rd.snapPoints(['rod', 'pivot', 'motor', 'weld'].includes(A.S.tool))) consider(p);
     if (best) return { p: best, snapped: true };
     const w = V.s2w(sx, sy);
     if (A.S.opts.snapGrid) return { p: [Math.round(w[0] * 10) / 10, Math.round(w[1] * 10) / 10], snapped: true };
@@ -132,12 +123,9 @@
   }
 
   // A joint end at world point p: on the topmost body there (except one), or on the ground.
+  // On a rod the point is moved onto its centre line.
   function endAt(p, exceptId) { return endOn(bodiesAt(p, exceptId)[0], p); }
-  function endOn(b, p) {
-    if (!b) return { body: null, x: p[0], y: p[1] };
-    const [x, y] = P.toLocal(b, p[0], p[1]);
-    return { body: b.id, x, y };
-  }
+  const endOn = (b, p) => Rd.endOn(b, p);
 
   // ---------- previews (drawn in the accent colour on top of the scene) ----------
 
@@ -176,15 +164,27 @@
             if (dist(R.ws(p), [sx, sy]) < 9) { op = { type: 'handle', j: S.selected, which, p }; return; }
           }
         }
+        // ...and the end handles on a selected rod (change its length, re-attach the end)
+        if (S.selected && S.selected.kind === 'bar' && !S.running) {
+          for (const [sg, p] of Rd.endHandles(S.selected)) {
+            if (dist(R.ws(p), [sx, sy]) < 9) { op = { type: 'barEnd', b: S.selected, sg, p }; return; }
+          }
+        }
         // 2. ground anchors: drag them about, even while it's running
         const anchors = anchorsAt(sx, sy);
         if (anchors) { op = { type: 'anchor', ends: anchors, moved: false }; canvas.style.cursor = 'grabbing'; return; }
-        // 3. a body: grab the exact point you pressed
-        const item = pick(sx, sy);
+        // 3. a body: grab the exact point you pressed (a massless rod hands it to what it joins;
+        //    a pin grabs the mechanism there)
+        const item = pick(sx, sy, true);
         A.select(item);
+        let hold = null;
         if (item && M.isBody(item)) {
-          const [x, y] = P.toLocal(item, w[0], w[1]);
-          const drag = { body: item.id, x, y, tx: w[0], ty: w[1] };
+          if (item._red) hold = Rd.grabTarget(item, w);
+          else { const [x, y] = P.toLocal(item, w[0], w[1]); hold = { body: item.id, x, y }; }
+          if (!hold) A.hint('This rod is pinned to the ground at both ends, so there’s nothing to move.');
+        } else if (item && (item.kind === 'pivot' || item.kind === 'weld')) hold = Rd.nodeGrab(item);
+        if (hold) {
+          const drag = { body: hold.body, x: hold.x, y: hold.y, tx: w[0], ty: w[1] };
           if (S.running) { grab(drag); op = { type: 'grab' }; } else { op = { type: 'pose', drag, moved: false }; S.poseDrag = drag; }
           canvas.style.cursor = 'grabbing';
         } else if (!item) op = { type: 'pan', last: [sx, sy] };
@@ -207,6 +207,11 @@
           if (!S.running) { P.pose(S.scene, null, 20); A.touched(); }
         }
         if (op.type === 'handle') { const s = snap(sx, sy); op.p = s.p; S.snap = s.snapped ? s.p : null; }
+        if (op.type === 'barEnd') {
+          const s = snap(sx, sy); op.p = s.p; S.snap = s.snapped ? s.p : null;
+          const f = R.ws(Rd.endHandles(op.b).find(([sg]) => sg === -op.sg)[1]), q = R.ws(op.p);
+          setPreview((ctx) => line(ctx, f, q, 3.6, [6, 4]));
+        }
       },
       up() {
         if (!op) return;
@@ -214,6 +219,7 @@
         if (op.type === 'pose') { A.S.poseDrag = null; if (op.moved) A.changed(); }
         if (op.type === 'anchor' && op.moved && !A.S.running) A.changed();
         if (op.type === 'handle') moveHandle(op.j, op.which, op.p);
+        if (op.type === 'barEnd' && op.p !== Rd.endHandles(op.b).find(([sg]) => sg === op.sg)[1]) Rd.moveEnd(op.b, op.sg, op.p);
         canvas.style.cursor = '';
       },
     },
@@ -281,6 +287,7 @@
       },
       up() {
         const scene = A.S.scene, host = bodiesAt(op.p0)[0];
+        if (host && host.kind === 'bar') op.p0 = Rd.onPart(host, op.p0);
         A.checkpoint();
         const d = M.addBody(scene, { kind: 'disc', x: op.p0[0], y: op.p0[1], r: op.r, mass: 1, color: 'ink', label: M.autoLabel(scene, 'disc') });
         A.spawn(d);
@@ -290,11 +297,27 @@
       },
     },
 
-    pivot: { tap: true, down() {}, move() {}, up(sx, sy) { pinAt(sx, sy, 'pivot'); } },
-    motor: { tap: true, down() {}, move() {}, up(sx, sy) { pinAt(sx, sy, 'pivot', { motor: 30, torque: 50 }); } },
-    weld: { tap: true, down() {}, move() {}, up(sx, sy) { pinAt(sx, sy, 'weld'); } },
+    pivot: { tap: true, down() {}, move() {}, up(sx, sy) { Rd.pinAt(snap(sx, sy).p, 'pivot'); } },
+    motor: { tap: true, down() {}, move() {}, up(sx, sy) { Rd.pinAt(snap(sx, sy).p, 'motor'); } },
+    weld: { tap: true, down() {}, move() {}, up(sx, sy) { Rd.pinAt(snap(sx, sy).p, 'weld'); } },
 
-    rod: lineTool('rod'),
+    // Rods: each end joins a shared pin, a free rod end, a rod's line, or a part (see rods.js).
+    rod: {
+      down(sx, sy) { const p = snap(sx, sy).p; op = { c1: Rd.classify(p), s0: [sx, sy] }; op.c2 = { type: 'empty', p }; },
+      move(sx, sy) {
+        if (!op) return;
+        const s = snap(sx, sy); A.S.snap = s.snapped ? s.p : null;
+        const ex = op.c1.type === 'part' ? op.c1.body.id : op.c1.bar ? op.c1.bar.id : undefined;
+        op.c2 = Rd.classify(s.p, ex);
+        op.plan = Rd.planRod(op.c1, op.c2);
+        setPreview((ctx) => Rd.drawPlan(ctx, op.plan));
+      },
+      up() {
+        if (!op || !op.plan) return;
+        if (op.plan.refuse) { A.hint(op.plan.refuse); return; }
+        Rd.makeRod(op.plan, op.c1, op.c2);
+      },
+    },
     rope: lineTool('rope'),
     spring: lineTool('spring'),
     damper: lineTool('damper'),
@@ -360,14 +383,19 @@
     erase: {
       tap: true, down() {}, move() {},
       up(sx, sy) {
-        const item = pick(sx, sy);
+        const item = pick(sx, sy, true);
         if (!item) return;
-        A.checkpoint(); M.remove(A.S.scene, item); A.select(null); A.changed();
+        A.checkpoint();
+        if (item.kind === 'pivot' || item.kind === 'weld') { // the whole shared pin
+          const n = Rd.nodeOf(item);
+          A.S.scene.joints = A.S.scene.joints.filter((j) => !(n ? n.joints : [item]).includes(j));
+        } else M.remove(A.S.scene, item);
+        A.select(null); A.changed();
       },
     },
   };
 
-  // Rods, ropes, springs, dampers and pistons are all drawn by dragging from point to point.
+  // Ropes, springs, dampers and pistons are all drawn by dragging from point to point.
   function lineTool(kind) {
     return {
       down(sx, sy) { op = { p0: snap(sx, sy).p }; op.p1 = op.p0; },
@@ -378,7 +406,7 @@
         setPreview((ctx) => {
           ctx.save(); ctx.globalAlpha = 0.8;
           if (kind === 'spring') R.coil(ctx, a, b, 10, 9);
-          else line(ctx, a, b, { rod: 3.6, rope: 1.6, damper: 2, piston: 5 }[kind]);
+          else line(ctx, a, b, { rope: 1.6, damper: 2, piston: 5 }[kind]);
           ctx.restore(); previewText(ctx, `${L.toFixed(2)} m`, b);
         });
       },
@@ -389,7 +417,6 @@
         const ea = endAt(op.p0), eb = endAt(op.p1, ea.body);
         if (ea.body == null && eb.body == null) { A.hint(`At least one end of the ${kind} needs to be on a part.`); return; }
         const extra = {
-          rod: { length: L, label: M.autoLabel(scene, 'rod') },
           rope: { length: L },
           spring: { rest: L, label: M.autoLabel(scene, 'spring') },
           damper: { c: 20, len0: L, label: M.autoLabel(scene, 'damper') },
@@ -400,19 +427,6 @@
         A.select(j); A.changed();
       },
     };
-  }
-
-  function pinAt(sx, sy, kind, extra = {}) {
-    const scene = A.S.scene, p = snap(sx, sy).p, under = bodiesAt(p);
-    const what = extra.motor ? 'motor' : kind === 'pivot' ? 'pin' : 'glue';
-    if (!under.length) { A.hint(`A ${what} goes on a part: tap one, or where two parts overlap.`); return; }
-    const [b1, b2] = under;
-    A.checkpoint();
-    const props = Object.assign({ kind, a: endOn(b1, p), b: endOn(b2, p) }, extra);
-    if (kind === 'weld') props.angle0 = (b2 ? b2.a : 0) - b1.a;
-    const j = M.addJoint(scene, props);
-    A.select(j); A.changed();
-    A.hint(`${what[0].toUpperCase() + what.slice(1)} ${b2 ? 'joins the two parts' : 'fixes it to the ground'}.`);
   }
 
   function drawPolyPreview() {

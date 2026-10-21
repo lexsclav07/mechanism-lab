@@ -4,7 +4,7 @@
   const ML = (window.ML = window.ML || {});
   const P = ML.Phys, R = ML.Render, M = ML.Model, V = R.View;
   const $ = (id) => document.getElementById(id);
-  const STORE = 'mechlab.scene.v1', OPTS = 'mechlab.opts.v3';
+  const STORE = 'mechlab.scene.v2', OLD_STORE = 'mechlab.scene.v1', OPTS = 'mechlab.opts.v3';
   const TOOLS = ['select', 'camera', 'box', 'weight', 'poly', 'pivot', 'motor', 'weld', 'rod', 'rope']; // number keys 1–0
   const PLANETS = [['Earth', 9.81], ['Moon', 1.62], ['Mars', 3.71], ['Jupiter', 24.79], ['Zero-G', 0]];
   const calm = matchMedia('(prefers-reduced-motion: reduce)');
@@ -172,7 +172,7 @@
     P.index(sc);
     const pts = [];
     for (const b of sc.bodies) {
-      const r = b.kind === 'disc' ? b.r : b.kind === 'box' ? Math.hypot(b.w, b.h) / 2 : Math.max(...b.pts.map(([x, y]) => Math.hypot(x, y)));
+      const r = b.kind === 'disc' ? b.r : b.kind === 'box' ? Math.hypot(b.w, b.h) / 2 : b.kind === 'bar' ? b.L / 2 : Math.max(...b.pts.map(([x, y]) => Math.hypot(x, y)));
       pts.push([b.x - r, b.y - r], [b.x + r, b.y + r]);
     }
     for (const j of sc.joints) pts.push(P.endWorld(sc, j.a), P.endWorld(sc, j.b));
@@ -421,6 +421,7 @@
 
     try { Object.assign(S.opts, JSON.parse(store.get(OPTS) || '{}')); } catch { /* ignore */ }
     ML.Inspector.init(App, $('inspector'));
+    ML.Rods.init(App);
     ML.Editor.init(App, canvas);
     new ResizeObserver(resize).observe(canvas.parentElement);
     resize();
@@ -442,7 +443,7 @@
     // what to show first: a live-update snapshot, then the autosave, then the video's contraption
     let text = data && data.scene;
     const fromSnapshot = !!text;
-    if (!text) text = store.get(STORE);
+    if (!text) text = store.get(STORE) || store.get(OLD_STORE); // older saves convert their rods on load
     let loaded = false;
     if (text) { try { S.scene = M.load(text); loaded = true; } catch { /* fall through */ } }
     setTool('select');

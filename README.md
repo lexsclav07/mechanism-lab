@@ -7,7 +7,8 @@ move with real forces and speeds in SI units (N, m/s, N·m, J).
 It started from a classic dynamics figure: a frame hung on two rods, a block sliding inside it
 between two springs, and a pendulum hanging off the block. That mechanism is the first example.
 Others include an Atwood machine, a quarter-car suspension, an F1 front suspension (double
-wishbones, pushrods and rockers on a shaker rig), a double pendulum and a four-bar linkage.
+wishbones, pushrods and rockers on a shaker rig), a double pendulum, a four-bar linkage, a
+motor-driven rod linkage and a piston-driven scissor lift.
 
 ## Running it
 
@@ -28,8 +29,13 @@ python3 -m http.server 8000   # then open http://localhost:8000
 |        | Follow   | Tap a point on a part and the camera tracks it. |
 | Bodies | Block, Weight, Shape | Rigid bodies. Weights dropped on a body stick to it. Any body's weight can be set positive or negative (negative floats up). |
 | Joints | Pin, Motor, Glue, Track | Pin two parts together (or one to the ground), drive a pin with a motor (speed in rpm, max torque in N·m), glue parts rigidly, or let a block slide on a track. |
-| Links  | Rod, Rope, Pulley | A stiff weightless link; a rope that only pulls when tight; a rope over a wheel. |
+| Links  | Rod, Rope, Pulley | A rod is a real part: join rods end to end, pin one anywhere along another, pin two where they cross, glue them into shapes, or put a motor on their joint. Rods weigh 0.2 kg/m by default, or switch on "Massless" for an ideal link. Also a rope that only pulls when tight, and a rope over a wheel. |
 | Forces | Spring, Damper, Piston | Hooke's-law spring (k, damping, relaxed length); viscous damper (c); hydraulic piston (speed, max force, stroke). |
+
+With the Rod tool, drag from point to point. Starting or ending on a rod's end, on a rod, or on a
+body joins the new rod there. A loose end next to a body is pinned to the ground. Tapping an
+overlapping spot again picks the next part underneath. A pin's card shows how many parts share it
+and has a "Fixed to the ground" switch.
 
 Tap a part to open its card, where every setting has a slider and a box for an exact value, plus
 live readouts. Space plays and pauses, R resets to where you last pressed Play, and Ctrl+Z / Ctrl+Y
@@ -42,7 +48,11 @@ build as text.
 al. 2020). Each frame is split into about 100 substeps. Joints are solved by correcting positions
 directly, so pins and rods don't drift apart. Springs and weight are ordinary forces. Dampers are
 solved implicitly so even very stiff ones stay stable. Motors and pistons are force-limited speed
-controllers, so an overloaded actuator really stalls. Pulley ropes wrap round the wheel, and the wrap
+controllers, so an overloaded actuator really stalls. A motor also adds a little rotor inertia, so a
+light crank doesn't jitter. Pistons slow down near the ends of their stroke and have a hydraulic
+cushion in the last 2 cm, like real cylinders, so they don't slam into their stops. A massless
+rod between two pins is solved as a single distance constraint. Pins on light rods get extra
+solver passes, so a 0.1 kg rod can carry a 20 kg load without stretching. Pulley ropes wrap round the wheel, and the wrap
 counts towards the rope's length.
 
 The solver loses a little energy over time (it shrinks as the step gets smaller). Bodies don't
@@ -54,7 +64,8 @@ collide with each other.
 index.html          page, styles and the HUD
 js/physics.js       solver: bodies, joints, actuators, stepping
 js/render.js        textbook-style drawing on a canvas
-js/model.js         scene data, defaults, save/load
+js/model.js         scene data, defaults, save/load (old builds' rods convert to rod parts)
+js/rods.js          rod rules: what a rod end joins, shared pins, ground switch, end handles
 js/editor.js        the tools: placing parts, grabbing, snapping, camera follow
 js/inspector.js     the card for the tapped part
 js/presets.js       example scenes
@@ -70,4 +81,5 @@ node tests/physics-checks.js
 
 It checks pendulum and spring periods, an Atwood machine's acceleration and rope tension, rope
 slack, damper terminal speed, piston force and stall, motor speed under load, negative weight, the
-grab hand, and that every example runs for 10 seconds with its joints holding.
+grab hand, a rod pendulum's period, rod chains, a motor crank on a light rod, pins healing when
+a part is deleted, that old saves move identically after conversion, and that every example runs for 10 seconds with its joints holding.
