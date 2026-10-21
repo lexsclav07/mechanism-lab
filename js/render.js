@@ -49,6 +49,9 @@
     } else if (b.kind === 'box') {
       rectPath(ctx, b, b.w, b.h);
       if (b.hollow) { const [wi, hi] = P.innerSize(b); if (wi > 0 && hi > 0) rectPath(ctx, b, wi, hi); }
+    } else if (b.kind === 'bar') { // a rod is a line from end A to end B
+      const a = ws(P.toWorld(b, -b.L / 2, 0)), c = ws(P.toWorld(b, b.L / 2, 0));
+      ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]);
     } else {
       b.pts.forEach(([lx, ly], i) => { const s = ws(P.toWorld(b, lx, ly)); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); });
       ctx.closePath();
@@ -58,7 +61,22 @@
   function extent(b) {
     if (b.kind === 'disc') return b.r;
     if (b.kind === 'box') return Math.hypot(b.w, b.h) / 2;
+    if (b.kind === 'bar') return b.L / 2;
     return Math.max(...b.pts.map(([x, y]) => Math.hypot(x, y)));
+  }
+
+  // Rods: a thick black line with round ends, as in the figure. A rod fixed in place gets
+  // short hatch marks along one side.
+  function drawBar(ctx, b) {
+    const a = ws(P.toWorld(b, -b.L / 2, 0)), c = ws(P.toWorld(b, b.L / 2, 0));
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]);
+    ctx.lineWidth = 3.6; ctx.lineCap = 'round'; ctx.strokeStyle = C.ink; ctx.stroke(); ctx.lineCap = 'butt';
+    if (b.fixed) {
+      const [ux, uy] = norm(c[0] - a[0], c[1] - a[1]), L = Math.hypot(c[0] - a[0], c[1] - a[1]);
+      ctx.beginPath();
+      for (let t = 4; t < L - 2; t += 7) { ctx.moveTo(a[0] + ux * t, a[1] + uy * t); ctx.lineTo(a[0] + ux * (t + 4) - uy * 6, a[1] + uy * (t + 4) + ux * 6); }
+      ctx.lineWidth = 1; ctx.stroke();
+    }
   }
 
   // Diagonal hatching inside the current clip region, the drafting symbol for "ground".
@@ -192,8 +210,9 @@
         if (B.kind === 'box') {
           const [ex, ey] = P.rotate(B.a, 1, 0), [fx, fy] = P.rotate(B.a, 0, 1);
           off = Math.abs(nwx * ex + nwy * ey) * B.w / 2 + Math.abs(nwx * fx + nwy * fy) * B.h / 2;
-        } else off = extent(B);
-        off *= View.ppm();
+        } else if (B.kind !== 'bar') off = extent(B);
+        // A rod rides on its pin, so the floor sits just under the line, not half a rod away.
+        off = B.kind === 'bar' ? 6 : off * View.ppm();
       }
       const a = [s0[0] - sx * (ext + 20) + nx * off, s0[1] - sy * (ext + 20) + ny * off];
       const L = Math.hypot(s1[0] - s0[0], s1[1] - s0[1]) + 2 * (ext + 20);
@@ -332,10 +351,15 @@
     }
     const p = P.endWorld(scene, j.a), s = ws(p);
     const ground = j.a.body == null ? j.a : j.b.body == null ? j.b : null;
-    if (ground) {
-      const [dx, dy] = awayFrom(scene, p, ground === j.a ? j.b : j.a);
-      support(ctx, s, dx, dy);
+    if (ground) { // several parts pinned to one anchor share one support
+      const key = `${ground.x.toFixed(4)},${ground.y.toFixed(4)}`;
+      if (!anchorsDrawn.has(key)) {
+        anchorsDrawn.add(key);
+        const [dx, dy] = awayFrom(scene, p, ground === j.a ? j.b : j.a);
+        support(ctx, s, dx, dy);
+      }
     }
+    if (hidesPin(scene, j.a) || hidesPin(scene, j.b)) return;
     if (j.kind === 'weld') {
       ctx.beginPath(); ctx.moveTo(s[0], s[1] - 5); ctx.lineTo(s[0] + 5, s[1]); ctx.lineTo(s[0], s[1] + 5); ctx.lineTo(s[0] - 5, s[1]); ctx.closePath();
       ctx.fillStyle = C.ink; ctx.fill();
@@ -346,12 +370,21 @@
   }
 
   const DRAW = { spring: drawSpring, damper: drawDamper, rod: drawRod, rope: drawRope, piston: drawPiston, pulley: drawPulley };
+  let anchorsDrawn = new Set();
 
   // ---------- labels and live values ----------
 
   function drawLabels(ctx, scene) {
     for (const b of scene.bodies) {
       if (!b.label) continue;
+      if (b.kind === 'bar') {
+        const s1 = ws(P.toWorld(b, -b.L / 2, 0)), s2 = ws(P.toWorld(b, b.L / 2, 0));
+        let [nx, ny] = norm(-(s2[1] - s1[1]), s2[0] - s1[0]);
+        if (ny > 0 || (ny === 0 && nx > 0)) { nx = -nx; ny = -ny; }
+        const align = Math.abs(nx) > 0.6 ? (nx < 0 ? 'right' : 'left') : 'center';
+        placed.push(label(ctx, b.label, (s1[0] + s2[0]) / 2 + nx * 13, (s1[1] + s2[1]) / 2 + ny * 13, align, 15));
+        continue;
+      }
       // leader line from the lower-right of the outline, like the M_f callout in the figure
       let lp;
       if (b.kind === 'disc') lp = [b.x + b.r * 0.7071, b.y + b.r * 0.7071];
@@ -413,11 +446,23 @@
   }
 
   function drawValues(ctx, scene, ui) {
-    const busy = scene.bodies.length + scene.joints.length > 30; // too many: only the selected part
+    const bars = new Set(scene.bodies.filter((b) => b.kind === 'bar').map((b) => b.id));
+    const onBar = (j) => (j.kind === 'pivot' || j.kind === 'weld') && !j.motor && (bars.has(j.a.body) || bars.has(j.b.body));
+    const count = scene.bodies.length + scene.joints.filter((j) => !onBar(j)).length;
+    const busy = count > 30; // too many: only the selected part
     const show = (item) => !busy || item === ui.selected;
     const run = ui.running;
     // with lots of rods (a suspension, a truss) their forces only show on the one you point at
-    const manyRods = scene.joints.filter((j) => j.kind === 'rod').length > 4;
+    const manyRods = bars.size + scene.joints.filter((j) => j.kind === 'rod').length > 4;
+    for (const b of scene.bodies) {
+      if (b.kind !== 'bar' || !run || !show(b) || (manyRods && b !== ui.selected && b !== ui.hover)) continue;
+      const F = P.barAxial(scene, b);
+      if (F == null || Math.abs(F) < 0.05) continue;
+      const s1 = ws(P.toWorld(b, -b.L / 2, 0)), s2 = ws(P.toWorld(b, b.L / 2, 0));
+      let [nx, ny] = norm(-(s2[1] - s1[1]), s2[0] - s1[0]);
+      if (ny < 0 || (ny === 0 && nx > 0)) { nx = -nx; ny = -ny; }
+      note(ctx, 'F', `${num(F)} N`, (s1[0] + s2[0]) / 2 + nx * 14, (s1[1] + s2[1]) / 2 + ny * 14, C.ink, nx);
+    }
     for (const j of scene.joints) {
       if (!show(j)) continue;
       if (j.kind === 'rod' && manyRods && j !== ui.selected && j !== ui.hover) continue;
@@ -427,7 +472,7 @@
         note(ctx, 'T', `${num(j._f)} N`, c[0], c[1] + j.r * View.ppm() + 16);
         continue;
       }
-      if (j.kind === 'pivot') {
+      if (j.kind === 'pivot' || j.kind === 'weld') {
         if (!j.motor) continue;
         const s = ws(P.endWorld(scene, j.a));
         if (run) note(ctx, 'τ', `${num(Math.abs(j._torque || 0))} N·m`, s[0], s[1] + 30);
@@ -486,7 +531,9 @@
     ctx.save();
     ctx.globalAlpha = strong ? 1 : 0.45; ctx.strokeStyle = C.accent; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     if (item.mass != null) { // a body (joints have no mass)
-      bodyPath(ctx, item); ctx.lineWidth = 2.5; ctx.stroke();
+      bodyPath(ctx, item);
+      if (item.kind === 'bar') { ctx.lineWidth = 12; ctx.globalAlpha *= 0.3; } else ctx.lineWidth = 2.5;
+      ctx.stroke();
     } else {
       jointPath(ctx, scene, item);
       const wide = item.kind === 'spring' || item.kind === 'damper' || item.kind === 'piston' || item.kind === 'rod';
@@ -592,20 +639,22 @@
 
   function render(ctx, scene, ui) {
     P.index(scene);
-    placed = [];
+    placed = []; anchorsDrawn = new Set();
     ctx.fillStyle = C.paper; ctx.fillRect(0, 0, View.W, View.H);
     if (ui.opts.grid) drawGrid(ctx);
     drawTraces(ctx, ui.traces);
     for (const j of scene.joints) if (j.kind === 'slider') drawRail(ctx, scene, j);
-    for (const b of scene.bodies) {
+    const popped = (b, draw) => {
       const k = popScale(ui, b.id);
-      if (k === 1) { drawBody(ctx, b); continue; }
+      if (k === 1) { draw(ctx, b); return; }
       const s = View.w2s(b.x, b.y);
       ctx.save(); ctx.translate(s[0], s[1]); ctx.scale(k, k); ctx.translate(-s[0], -s[1]);
-      drawBody(ctx, b); ctx.restore();
-    }
+      draw(ctx, b); ctx.restore();
+    };
+    for (const b of scene.bodies) if (b.kind !== 'bar') popped(b, drawBody);
     for (const kind of ['spring', 'damper', 'rope', 'rod', 'piston', 'pulley']) {
       for (const j of scene.joints) if (j.kind === kind) DRAW[kind](ctx, scene, j);
+      if (kind === 'rod') for (const b of scene.bodies) if (b.kind === 'bar') popped(b, drawBar);
     }
     for (const j of scene.joints) if (j.kind === 'pivot' || j.kind === 'weld' || j.kind === 'slider') drawJointMark(ctx, scene, j);
     if (ui.opts.labels) drawLabels(ctx, scene);

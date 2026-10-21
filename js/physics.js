@@ -44,6 +44,9 @@
   }
 
   const rectJ = (w, h) => (w * h * (w * w + h * h)) / 12;
+  // Rods ('bar' bodies) are lines from local (-L/2, 0) to (+L/2, 0); this is their half-thickness
+  // for picking them up.
+  const BAR_HALF = 0.015;
 
   function innerSize(b) {
     return [Math.max(0, b.w - 2 * b.wall), Math.max(0, b.h - 2 * b.wall)];
@@ -56,6 +59,7 @@
       return b.w * b.h - wi * hi;
     }
     if (b.kind === 'disc') return Math.PI * b.r * b.r;
+    if (b.kind === 'bar') return b.L * 2 * BAR_HALF;
     return Math.abs(polyArea(b.pts));
   }
 
@@ -68,6 +72,7 @@
       return (b.mass * J) / A;
     }
     if (b.kind === 'disc') return 0.5 * b.mass * b.r * b.r;
+    if (b.kind === 'bar') return (b.mass * b.L * b.L) / 12; // thin rod about its middle
     return (b.mass * polySecondMoment(b.pts)) / A;
   }
 
@@ -99,6 +104,95 @@
   function index(scene) {
     scene._byId = new Map();
     for (const b of scene.bodies) { scene._byId.set(b.id, b); updateMass(b); }
+    compileIdeal(scene);
+    // A motor has a spinning rotor: J = 0.002 s² × its torque rating, added to what it drives.
+    // Without it a strong motor on a light crank rod can whip the crank round at absurd speeds.
+    for (const j of scene.joints) {
+      if (j.kind !== 'pivot' || !j.motor) continue;
+      const d = (j.a.body != null ? scene._byId.get(j.a.body) : null) || (j.b.body != null ? scene._byId.get(j.b.body) : null);
+      if (!d || d.fixed || d._red) continue;
+      d._I += 0.002 * (j.torque || 0);
+      d._invI = 1 / d._I;
+    }
+    lightLinks(scene);
+  }
+
+  // Massless rods. A rod that is marked ideal and is held only by two plain pins, one at each
+  // end, to things with mass (or the ground) is solved as a weightless distance constraint
+  // between those two things, exactly like a textbook rod; its own pose just follows them. Any
+  // other rod (a free end, rod-to-rod, something pinned along it, a motor) uses its real mass.
+  // Two ideal rods pinned to each other both use their mass, so the result never depends on order.
+  function compileIdeal(scene) {
+    for (const j of scene.joints) { j._ideal = null; j._skip = null; }
+    const touching = new Map();
+    for (const b of scene.bodies) { b._red = null; if (b.kind === 'bar') touching.set(b.id, []); }
+    if (!touching.size) return;
+    for (const j of scene.joints) {
+      for (const k of ['a', 'b', 'p']) { const e = j[k]; if (e && e.body != null && touching.has(e.body)) touching.get(e.body).push(j); }
+    }
+    for (const b of scene.bodies) {
+      if (b.kind !== 'bar' || !b.ideal || b.fixed) continue;
+      const js = touching.get(b.id);
+      if (js.length !== 2 || js[0] === js[1]) continue;
+      const ends = [];
+      for (const j of js) {
+        if (j.kind !== 'pivot' || j.motor) break;
+        const mine = j.a.body === b.id ? j.a : j.b, far = mine === j.a ? j.b : j.a;
+        const fb = far.body != null ? scene._byId.get(far.body) : null;
+        if (far.body === b.id || (fb && fb.kind === 'bar' && fb.ideal)) break;
+        if (Math.abs(mine.y) > 1e-6 || Math.abs(Math.abs(mine.x) - b.L / 2) > 1e-6) break;
+        ends.push({ j, side: Math.sign(mine.x), far });
+      }
+      if (ends.length !== 2 || ends[0].side === ends[1].side) continue;
+      const [eA, eB] = ends[0].side < 0 ? ends : [ends[1], ends[0]];
+      const firstIsA = scene.joints.indexOf(eA.j) < scene.joints.indexOf(eB.j);
+      b._red = { farA: eA.far, farB: eB.far };
+      (firstIsA ? eA.j : eB.j)._ideal = b; // solved here, in the joint order an old rod had
+      (firstIsA ? eB.j : eA.j)._skip = b;
+    }
+  }
+
+  // Pins on real rods get solved again each substep (more passes the lighter the rod is next to
+  // what it holds), so chains, loops and trusses of rods stay tight. Scenes without real rods
+  // are unaffected.
+  function lightLinks(scene) {
+    scene._light = [];
+    for (const j of scene.joints) {
+      if (j.kind !== 'pivot' && j.kind !== 'weld') continue;
+      const A = bodyOf(scene, j.a), B = bodyOf(scene, j.b);
+      if (!((A && A.kind === 'bar' && !A._red) || (B && B.kind === 'bar' && !B._red))) continue;
+      if (!A || !B || A.fixed || B.fixed) continue;
+      const ratio = Math.max(A.mass, B.mass) / Math.max(1e-9, Math.min(A.mass, B.mass));
+      scene._light.push([j, ratio >= 100 ? 3 : ratio >= 10 ? 2 : 1]);
+    }
+  }
+
+  // Put massless rods back between the two things they join (after the joints move those).
+  function poseIdeal(scene) {
+    for (const b of scene.bodies) {
+      if (!b._red) continue;
+      const pA = endWorld(scene, b._red.farA), pB = endWorld(scene, b._red.farB);
+      b.x = (pA[0] + pB[0]) / 2; b.y = (pA[1] + pB[1]) / 2;
+      b.a = Math.atan2(pB[1] - pA[1], pB[0] - pA[0]);
+    }
+  }
+
+  // Force along a rod, + for pulling (tension). For a massless rod it's the constraint force;
+  // for a real rod with one pin at each end it's worked out from the two pin forces.
+  // Returns null when that isn't defined (no pins, or pins along the rod).
+  function barAxial(scene, b) {
+    if (b._red) return b._f || 0;
+    const pins = scene.joints.filter((j) => (j.kind === 'pivot' || j.kind === 'weld') && (j.a.body === b.id || j.b.body === b.id));
+    if (pins.length !== 2) return null;
+    const ux = Math.cos(b.a), uy = Math.sin(b.a);
+    let FA = null, FB = null;
+    for (const j of pins) {
+      const mine = j.a.body === b.id ? j.a : j.b, sg = mine === j.a ? 1 : -1;
+      if (Math.abs(Math.abs(mine.x) - b.L / 2) > 1e-6) return null;
+      const F = sg * ((j._fx || 0) * ux + (j._fy || 0) * uy);
+      if (mine.x < 0) FA = F; else FB = F;
+    }
+    return FA == null || FB == null ? null : (FB - FA) / 2;
   }
 
   // A joint end is {body, x, y}: local coords on a body, or world coords when body is null (ground).
@@ -115,6 +209,7 @@
   function hitBody(b, wx, wy, tol = 0) {
     const [lx, ly] = toLocal(b, wx, wy);
     if (b.kind === 'disc') return Math.hypot(lx, ly) <= b.r + tol;
+    if (b.kind === 'bar') return Math.abs(lx) <= b.L / 2 + tol && Math.abs(ly) <= BAR_HALF + tol;
     if (b.kind === 'box') {
       if (Math.abs(lx) > b.w / 2 + tol || Math.abs(ly) > b.h / 2 + tol) return false;
       if (!b.hollow) return true;
@@ -170,12 +265,15 @@
   }
 
   // Pull two joint ends together (pivots, welds, and the perpendicular part of sliders).
-  function joinEnds(scene, ea, eb, h) {
+  // With a joint j, also records the force on side a as a vector (j._fx, j._fy) in newtons.
+  function joinEnds(scene, ea, eb, h, j) {
     const A = bodyOf(scene, ea), B = bodyOf(scene, eb);
     const p1 = endWorld(scene, ea), p2 = endWorld(scene, eb);
-    return applyPos(A, A ? p1[0] - A.x : 0, A ? p1[1] - A.y : 0,
-                    B, B ? p2[0] - B.x : 0, B ? p2[1] - B.y : 0,
-                    p2[0] - p1[0], p2[1] - p1[1], 0, h);
+    const dx = p2[0] - p1[0], dy = p2[1] - p1[1], d = Math.hypot(dx, dy);
+    const lam = applyPos(A, A ? p1[0] - A.x : 0, A ? p1[1] - A.y : 0,
+                         B, B ? p2[0] - B.x : 0, B ? p2[1] - B.y : 0, dx, dy, 0, h);
+    if (j) { const k = d > 1e-12 ? lam / (d * h * h) : 0; j._fx = k * dx; j._fy = k * dy; }
+    return lam;
   }
 
   // ---------- joints ----------
@@ -321,7 +419,11 @@
     const nx = dx / len, ny = dy / len, [r1x, r1y] = arm(A, p1), [r2x, r2y] = arm(B, p2);
     const v1 = A ? [A.vx - A.av * r1y, A.vy + A.av * r1x] : [0, 0], v2 = B ? [B.vx - B.av * r2y, B.vy + B.av * r2x] : [0, 0];
     const vlen = (v2[0] - v1[0]) * nx + (v2[1] - v1[1]) * ny;
-    const F = drive(j, j.phase * j.speed - vlen, j._gain || 1, j.force, h); // + pushes the ends apart
+    // end-of-stroke cushioning, like a real hydraulic cylinder: slow down over the last bit of
+    // travel (never below 15%) so turning round isn't a hammer blow
+    const toEnd = j.phase > 0 ? j.max - len : len - j.min;
+    const cushion = Math.max(0.15, Math.min(1, toEnd / (j.speed * 0.2)));
+    const F = drive(j, j.phase * j.speed * cushion - vlen, j._gain || 1, j.force, h); // + pushes the ends apart
     const fx = F * nx, fy = F * ny;
     if (A) { A._fx -= fx; A._fy -= fy; A._t -= r1x * fy - r1y * fx; }
     if (B) { B._fx += fx; B._fy += fy; B._t += r2x * fy - r2y * fx; }
@@ -340,7 +442,7 @@
         const b = scene._byId.get(queue.pop());
         if (!b) continue;
         if (b.fixed) { grounded = true; continue; }
-        m += b.mass; I += b._I + b.mass * ((b.x - p[0]) ** 2 + (b.y - p[1]) ** 2);
+        if (!b._red) { m += b.mass; I += b._I + b.mass * ((b.x - p[0]) ** 2 + (b.y - p[1]) ** 2); }
         for (const k of scene.joints) {
           if (k === j) continue;
           const ids = [k.a.body, k.b.body, k.p && k.p.body];
@@ -403,10 +505,17 @@
   }
 
   function solveJoint(scene, j, h, posing) {
+    if (j._skip) { j._f = Math.abs(j._skip._f || 0); return; }
+    if (j._ideal) { // a massless rod: one distance constraint between the two things it joins
+      const b = j._ideal;
+      b._f = distance(scene, { a: b._red.farA, b: b._red.farB }, b.L, h, 'rod');
+      j._f = Math.abs(b._f);
+      return;
+    }
     if (j.kind === 'pivot') {
-      j._f = joinEnds(scene, j.a, j.b, h) / (h * h);
+      j._f = joinEnds(scene, j.a, j.b, h, j) / (h * h);
     } else if (j.kind === 'weld') {
-      j._f = joinEnds(scene, j.a, j.b, h) / (h * h);
+      j._f = joinEnds(scene, j.a, j.b, h, j) / (h * h);
       applyAng(bodyOf(scene, j.a), bodyOf(scene, j.b), angleOf(scene, j.b) - angleOf(scene, j.a) - j.angle0, 0, h);
     } else if (j.kind === 'rod') {
       j._f = distance(scene, j, j.length, h, 'rod');
@@ -452,6 +561,24 @@
     return P / h;
   }
 
+  // Hydraulic cushions: in the last 2 cm of its stroke a piston squeezes oil through a small
+  // hole, which brakes it hard but smoothly instead of letting it slam into the end.
+  function cushionImpulse(scene, j, h) {
+    j._cush = 0;
+    const p1 = endWorld(scene, j.a), p2 = endWorld(scene, j.b);
+    const dx = p2[0] - p1[0], dy = p2[1] - p1[1], len = Math.hypot(dx, dy), zone = 0.02;
+    if (len < 1e-9) return;
+    const toMin = len - j.min, toMax = j.max - len;
+    if (Math.min(toMin, toMax) > zone) return;
+    const A = bodyOf(scene, j.a), B = bodyOf(scene, j.b), n = [dx / len, dy / len], r1 = arm(A, p1), r2 = arm(B, p2);
+    const vel = (b, r) => (b ? [b.vx - b.av * r[1], b.vy + b.av * r[0]] : [0, 0]);
+    const v1 = vel(A, r1), v2 = vel(B, r2), vlen = (v2[0] - v1[0]) * n[0] + (v2[1] - v1[1]) * n[1];
+    const closing = (toMin <= zone && vlen < 0) || (toMax <= zone && vlen > 0);
+    if (!closing) return;
+    const depth = 1 - Math.max(0, Math.min(toMin <= zone ? toMin : toMax, zone)) / zone; // 0 → 1 into the zone
+    j._cush = dampAlong(A, r1, B, r2, n, (j.force / 0.05) * depth, h);
+  }
+
   function damperImpulse(scene, j, h) {
     const A = bodyOf(scene, j.a), B = bodyOf(scene, j.b);
     const p1 = endWorld(scene, j.a), p2 = endWorld(scene, j.b);
@@ -487,7 +614,7 @@
     let m = 0;
     while (queue.length) {
       const cur = queue.pop(), b = scene.bodies.find((x) => x.id === cur);
-      if (b && !b.fixed) m += b.mass;
+      if (b && !b.fixed && !b._red) m += b.mass; // massless rods weigh nothing but still connect
       for (const j of scene.joints) {
         const ids = [j.a.body, j.b.body, j.p && j.p.body];
         if (!ids.includes(cur)) continue;
@@ -505,7 +632,10 @@
     const S = scene.settings, n = Math.max(1, Math.round(S.substeps * dt * 60)), h = dt / n;
     const damp = Math.exp(-S.air * h);
     for (const j of scene.joints) {
-      if (j.kind === 'piston' || (j.kind === 'pivot' && j.motor)) j._gain = Math.min(drivenLoad(scene, j), (directLoad(scene, j) * 0.015) / h);
+      // The controller works as hard as the parts it's pinned to can safely take in one substep.
+      // Whatever else hangs off them only adds inertia (a scissor's leverage can make a 30 kg
+      // load feel like tonnes at the piston), so this stays stable and keeps the speed on target.
+      if (j.kind === 'piston' || (j.kind === 'pivot' && j.motor)) j._gain = (directLoad(scene, j) * 0.015) / h;
     }
     for (let s = 0; s < n; s++) {
       // 1. forces: weight (which can be negative: it floats up), springs, motors, pistons, the hand
@@ -520,17 +650,29 @@
       for (const b of scene.bodies) {
         b._px = b.x; b._py = b.y; b._pa = b.a;
         if (b.fixed) { b.vx = b.vy = b.av = 0; continue; }
+        if (b._red) continue; // massless rods just follow what they join
         b.vx = (b.vx + h * b._fx * b._invM) * damp;
         b.vy = (b.vy + h * b._fy * b._invM) * damp;
         b.av = (b.av + h * b._t * b._invI) * damp;
       }
       // 3. dampers (and spring damping) take speed out
-      for (const j of scene.joints) if ((j.kind === 'damper' || j.kind === 'spring') && j.c > 0) damperImpulse(scene, j, h);
+      for (const j of scene.joints) {
+        if ((j.kind === 'damper' || j.kind === 'spring') && j.c > 0) damperImpulse(scene, j, h);
+        else if (j.kind === 'piston') cushionImpulse(scene, j, h);
+      }
       if (hand) handDamping(scene, hand, h);
       // 4. move, then let the joints put things right
-      for (const b of scene.bodies) if (!b.fixed) { b.x += h * b.vx; b.y += h * b.vy; b.a += h * b.av; }
+      for (const b of scene.bodies) if (!b.fixed && !b._red) { b.x += h * b.vx; b.y += h * b.vy; b.a += h * b.av; }
       for (const j of scene.joints) solveJoint(scene, j, h, false);
-      for (const j of scene.joints) if (j.kind === 'piston') j._f = -(j._push || 0) + j._stop; // + pull, - push
+      for (const [j, times] of scene._light) { // extra passes for light rods on heavy parts
+        for (let k = 0; k < times; k++) {
+          const f = j._f || 0, fx = j._fx || 0, fy = j._fy || 0;
+          solveJoint(scene, j, h, false);
+          j._f += f; j._fx += fx; j._fy += fy;
+        }
+      }
+      poseIdeal(scene);
+      for (const j of scene.joints) if (j.kind === 'piston') j._f = -(j._push || 0) + j._stop + (j._cush || 0); // + pull, - push
       // 5. the velocity is whatever movement actually happened
       for (const b of scene.bodies) {
         if (b.fixed) continue;
@@ -552,6 +694,7 @@
         held.x += drag.tx - p[0]; held.y += drag.ty - p[1];
       }
       for (const j of scene.joints) solveJoint(scene, j, 1, true);
+      poseIdeal(scene);
     }
     for (const b of scene.bodies) { b.vx = b.vy = b.av = 0; }
     for (const j of scene.joints) { j._f = 0; j._torque = 0; } // posing forces aren't real forces
@@ -564,7 +707,7 @@
     const g = scene.settings.gravity;
     let ke = 0, pe = 0;
     for (const b of scene.bodies) {
-      if (b.fixed) continue;
+      if (b.fixed || b._red) continue;
       ke += 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy) + 0.5 * b._I * b.av * b.av;
       pe += -b.mass * g * (b.gscale ?? 1) * b.y; // y is down, so height is -y
     }
@@ -578,7 +721,7 @@
 
   ML.Phys = {
     polyArea, polyCentroid, shapeArea, innerSize, updateMass, index,
-    toWorld, toLocal, rotate, bodyOf, angleOf, endWorld, hitBody, jointLength, pulleyGeom,
+    toWorld, toLocal, rotate, bodyOf, angleOf, endWorld, hitBody, jointLength, pulleyGeom, barAxial, poseIdeal,
     step, pose, energy, clusterMass,
   };
 })();

@@ -217,6 +217,51 @@
     return s;
   }
 
+  // Rods are parts: they join each other with pins. rod() adds one from p1 to p2.
+  const rod = (s, p1, p2, props = {}) => M.addBody(s, Object.assign({ kind: 'bar', x: (p1[0] + p2[0]) / 2, y: (p1[1] + p2[1]) / 2,
+    a: Math.atan2(p2[1] - p1[1], p2[0] - p1[0]), L: Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) }, props));
+  const pinRods = (s, b1, b2, p) => M.addJoint(s, { kind: 'pivot', a: on(s, b1, ...p), b: b2 ? on(s, b2, ...p) : ground(...p) });
+
+  // A four-bar linkage made only of rods, pinned end to end. A motor turns the short crank; the
+  // middle of the coupler rod draws its loop.
+  function rodLinkage() {
+    const s = M.newScene();
+    const O2 = [-0.8, 0.4], O4 = [0.8, 0.4], A = [-0.8, 0], B = circleCross(A, 1.8, O4, 1.3, true);
+    const crank = rod(s, O2, A, { label: 'L_2' }), coupler = rod(s, A, B, { label: 'L_3', trace: true }), rocker = rod(s, O4, B, { label: 'L_4' });
+    M.addJoint(s, { kind: 'pivot', a: on(s, crank, ...O2), b: ground(...O2), motor: 40, torque: 20 });
+    pinRods(s, crank, coupler, A);
+    pinRods(s, coupler, rocker, B);
+    pinRods(s, rocker, null, O4);
+    return s;
+  }
+
+  // A scissor lift: two X-shaped stages of rods pinned where they cross and end to end. The
+  // bottom right foot rolls along the floor, the platform's right corner rolls along the platform,
+  // and a piston opens the X to lift a 10 kg load.
+  function scissorLift() {
+    const s = M.newScene();
+    s.settings.substeps = 200; // a closed loop of rods carrying 25 kg: worth the accuracy
+    const w = 0.6, hgt = 0.5, arm = { mass: 2 };
+    const pts = (k) => [[-w, -k * hgt], [w, -k * hgt]]; // left and right joints at level k
+    const [l0, r0] = pts(0), [l1, r1] = pts(1), [l2, r2] = pts(2);
+    const a1 = rod(s, l0, r1, arm), b1 = rod(s, r0, l1, arm), a2 = rod(s, l1, r2, arm), b2 = rod(s, r1, l2, arm);
+    const deck = M.addBody(s, { kind: 'box', x: 0, y: -2 * hgt - 0.06, w: 1.6, h: 0.12, mass: 15, label: 'M' });
+    const load = M.addBody(s, { kind: 'box', x: 0.25, y: -2 * hgt - 0.27, w: 0.35, h: 0.3, mass: 10, label: 'm', color: 'dark' });
+    M.addJoint(s, { kind: 'weld', a: on(s, deck, 0.25, -2 * hgt - 0.12), b: on(s, load, 0.25, -2 * hgt - 0.12), angle0: 0 });
+    pinRods(s, a1, null, l0);                                        // fixed foot
+    // rolling foot; its stops keep the arms between about 10° (folded) and 57° (fully up)
+    M.addJoint(s, { kind: 'slider', a: ground(...r0), b: on(s, b1, ...r0), dir: [1, 0], lock: false, limits: true, lo: -0.5, hi: 0.08 });
+    pinRods(s, a1, b1, [0, -hgt / 2]);                               // first X
+    pinRods(s, a1, b2, r1); pinRods(s, b1, a2, l1);                  // stages joined end to end
+    pinRods(s, a2, b2, [0, -1.5 * hgt]);                             // second X
+    pinRods(s, b2, deck, l2);                                        // platform: fixed corner
+    M.addJoint(s, { kind: 'slider', a: on(s, deck, ...r2), b: on(s, a2, ...r2), dir: [1, 0], lock: false, limits: true, lo: -0.5, hi: 0.08 }); // rolling corner
+    // the piston's stroke covers arm angles of about 16° to 52°. A scissor needs its biggest push
+    // when it's nearly flat, so the cylinder is rated well above the load's 250 N weight.
+    M.addJoint(s, { kind: 'piston', a: ground(-0.2, 0), b: on(s, a1, 0.3, -0.375), min: 0.61, max: 0.8, len0: 0.625, speed: 0.08, force: 12000, mode: 'cycle', phase: 1 });
+    return preload(s); // starts with the piston already holding the load
+  }
+
   ML.Presets = [
     { id: 'frame', name: 'The swinging frame', blurb: 'The mechanism from your video.', build: swingingFrame },
     { id: 'atwood', name: 'Atwood machine', blurb: 'Two masses on a pulley. The heavier one wins, slowly.', build: atwood },
@@ -224,6 +269,8 @@
     { id: 'f1', name: 'F1 front suspension', blurb: 'Double wishbones, pushrods and rockers on a shaker rig, like the ones F1 teams test on.', build: f1Suspension },
     { id: 'double', name: 'Double pendulum', blurb: 'Two rods, total chaos. Never swings the same way twice.', build: doublePendulum },
     { id: 'fourbar', name: 'Four-bar linkage', blurb: 'A motor turns the crank and the coupler draws a loop.', build: fourBar },
+    { id: 'rodlinkage', name: 'Rod linkage', blurb: 'Three rods pinned end to end, driven by a motor crank.', build: rodLinkage },
+    { id: 'scissor', name: 'Scissor lift', blurb: 'Rods crossed in X shapes and pinned, opened by a piston.', build: scissorLift },
     { id: 'coupled', name: 'Coupled oscillators', blurb: 'Two blocks passing their energy back and forth through springs.', build: coupledOscillators },
     { id: 'piston', name: 'Crank and slider', blurb: 'A motor-driven wheel pushing a slider, like an engine in reverse.', build: crankPiston },
     { id: 'springpend', name: 'Spring pendulum', blurb: 'A weight on a spring that swings and bounces at once.', build: springPendulum },
