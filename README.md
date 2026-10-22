@@ -10,6 +10,12 @@ Others include an Atwood machine, a quarter-car suspension, an F1 front suspensi
 wishbones, pushrods and rockers on a shaker rig), a double pendulum, a four-bar linkage, a
 motor-driven rod linkage and a piston-driven scissor lift.
 
+The "Vibrations" examples include Kapitza's pendulum (an upside-down pendulum held up by
+shaking its pivot), coupled pendulums swapping their swing, and a resonance demo where only the
+spring tuned to the shaking builds up. The "Linkages" examples include Watt's and
+Peaucellier–Lipkin's straight-line linkages, Chebyshev's lambda linkage and a pintograph
+drawing machine. The real machines also include a Whitworth quick-return shaper.
+
 The "Statics" examples are textbook problems with known answers: a simply supported beam, a wall
 bracket held by a cable, a cantilever with a couple, and a Warren truss bridge.
 

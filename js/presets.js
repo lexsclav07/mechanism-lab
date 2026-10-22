@@ -574,27 +574,221 @@
     return s;
   }
 
+  // ---------- vibrations ----------
+
+  // Kapitza's pendulum: an upside-down pendulum that stays up because its pivot is shaken up and
+  // down fast. A motor crank (like the jigsaw motor in lab demos) bounces the pivot 8 cm each way
+  // at 670 rpm. The rule for a weight on a light rod: it stays up when (a ω)² > 2 g L, here
+  // 31 m²/s² against 9.8. Slow the motor below about 400 rpm and it falls over.
+  function kapitza() {
+    const s = M.newScene();
+    s.settings.air = 0; s.settings.substeps = 200; // 11 shakes a second: worth the accuracy
+    const O = [0, 0.7], a = 0.08, Lc = 0.45, L = 0.5, tilt = 12 * D;
+    const crank = M.addBody(s, { kind: 'disc', x: O[0], y: O[1], r: 0.12, mass: 1, color: 'light' });
+    M.addJoint(s, { kind: 'pivot', a: { body: crank.id, x: 0, y: 0 }, b: ground(...O), motor: 670, torque: 60 });
+    const pinC = [O[0], O[1] - a], piv = [O[0], pinC[1] - Lc];
+    const conrod = rod(s, pinC, piv);
+    pinRods(s, crank, conrod, pinC);
+    const car = M.addBody(s, { kind: 'box', x: piv[0], y: piv[1], w: 0.16, h: 0.1, mass: 0.5, color: 'dark' });
+    pinRods(s, conrod, car, piv);
+    M.addJoint(s, { kind: 'slider', a: ground(...piv), b: { body: car.id, x: 0, y: 0 }, dir: [0, 1], lock: true, limits: false, lo: -0.3, hi: 0.3 });
+    const top = [piv[0] + L * Math.sin(tilt), piv[1] - L * Math.cos(tilt)];
+    const bob = M.addBody(s, { kind: 'disc', x: top[0], y: top[1], r: 0.06, mass: 0.3, color: 'ink', label: 'm', trace: true });
+    const arm = rod(s, piv, top, { label: 'L' });
+    pinRods(s, car, arm, piv);
+    pinRods(s, arm, bob, top);
+    return s;
+  }
+
+  // Two pendulums joined by a weak spring. Start one swinging and its energy drains into the
+  // other, then comes back: beats, the slow swap between the two normal modes.
+  function coupledPendulums() {
+    const s = M.newScene();
+    s.settings.air = 0;
+    const L = 1.5, gap = 1.0, hang = 0.5, kick = 14 * D;
+    M.addBody(s, { kind: 'box', x: 0, y: -1.6, w: 2.2, h: 0.14, mass: 10, fixed: true }); // the ceiling beam
+    const bobs = [-1, 1].map((sd, i) => {
+      const piv = [sd * gap / 2, -1.53], th = i === 0 ? kick : 0;
+      const end = [piv[0] + L * Math.sin(th), piv[1] + L * Math.cos(th)];
+      const bob = M.addBody(s, { kind: 'disc', x: end[0], y: end[1], r: 0.12, mass: 1, color: 'ink', label: `m_${i + 1}`, trace: false });
+      const arm = rod(s, piv, end, { ideal: false, mass: 0.1, label: `L_${i + 1}` });
+      pinRods(s, arm, null, piv); pinRods(s, arm, bob, end);
+      return { arm, piv, th };
+    });
+    // the spring joins the two rods `hang` below their pivots, relaxed when both hang straight
+    const pt = (q) => [q.piv[0] + hang * Math.sin(q.th), q.piv[1] + hang * Math.cos(q.th)];
+    M.addJoint(s, { kind: 'spring', a: on(s, bobs[0].arm, ...pt(bobs[0])), b: on(s, bobs[1].arm, ...pt(bobs[1])), k: 3, c: 0, rest: gap, coils: 12, label: 'k' });
+    return s;
+  }
+
+  // Resonance: one shaking beam, three weights on springs of different stiffness. A motor crank
+  // shakes the beam 3 cm each way at 95 rpm, 1.6 times a second, which is the middle spring's own
+  // frequency (f = √(k/m) / 2π with k = 100 N/m, m = 1 kg), so that one builds up big swings while
+  // the other two hardly move. Change the motor's speed to pick a different one: 60 rpm for the
+  // soft spring, 150 rpm for the stiff one.
+  function resonance() {
+    const s = M.newScene();
+    s.settings.air = 0;
+    const ks = [40, 100, 250], xs = [-1.2, 0, 1.2], drop = 1.2, a = 0.03;
+    const beam = M.addBody(s, { kind: 'box', x: 0, y: -1.2, w: 3.2, h: 0.16, mass: 5, color: 'dark' });
+    M.addJoint(s, { kind: 'slider', a: ground(0, -1.2), b: { body: beam.id, x: 0, y: 0 }, dir: [0, 1], lock: true, limits: false, lo: -0.2, hi: 0.2 });
+    // the shaker: a crank above the beam, pushing it through a short rod
+    const O = [0, -1.8], crank = M.addBody(s, { kind: 'disc', x: O[0], y: O[1], r: 0.08, mass: 1, color: 'light' });
+    M.addJoint(s, { kind: 'pivot', a: { body: crank.id, x: 0, y: 0 }, b: ground(...O), motor: 95, torque: 80 });
+    const cp = [O[0] + a, O[1]], bt = [0, -1.28], push = rod(s, cp, bt);
+    pinRods(s, crank, push, cp); pinRods(s, push, beam, bt);
+    ks.forEach((k, i) => {
+      const sag = 9.81 / k, y = -1.12 + drop; // hang at rest: the spring already carries the weight
+      const m = M.addBody(s, { kind: 'box', x: xs[i], y, w: 0.3, h: 0.24, mass: 1, label: `m_${i + 1}`, color: i === 1 ? 'grey' : 'light' });
+      M.addJoint(s, { kind: 'slider', a: ground(xs[i], y), b: { body: m.id, x: 0, y: 0 }, dir: [0, 1], lock: true, limits: false, lo: -1, hi: 1 });
+      M.addJoint(s, { kind: 'spring', a: on(s, beam, xs[i], -1.12), b: { body: m.id, x: 0, y: -0.12 }, k, c: 1.5, rest: drop - 0.12 - sag, coils: 10, label: `k_${i + 1}` });
+    });
+    return s;
+  }
+
+  // ---------- linkages ----------
+
+  // Watt's linkage: two equal arms pinned to the frame and a short link between them. The middle
+  // of that link moves in a nearly straight line, so cars use it to keep the rear axle going
+  // straight up and down. Here the axle bounces on a spring; its path is the traced line.
+  function wattLinkage() {
+    const s = M.newScene();
+    s.settings.air = 0;
+    const R = 1.2, h = 0.25, m = 5, k = 300;
+    const A = [-R, -h], B = [0, -h], C = [0, h], Dp = [R, h];
+    const left = rod(s, A, B, { label: 'L_1' }), right = rod(s, Dp, C, { label: 'L_2' });
+    const link = rod(s, B, C, { ideal: false, mass: 1 }); // the axle bracket
+    const axle = M.addBody(s, { kind: 'disc', x: 0, y: 0, r: 0.1, mass: m, color: 'ink', label: 'm', trace: true });
+    pinRods(s, left, null, A); pinRods(s, right, null, Dp);
+    pinRods(s, left, link, B); pinRods(s, right, link, C); pinRods(s, link, axle, [0, 0]);
+    // spring from above, carrying the axle's weight when it sits in the middle
+    M.addJoint(s, { kind: 'spring', a: ground(0, -1.6), b: { body: axle.id, x: 0, y: 0 }, k, c: 0, rest: 1.6 - (m * 9.81) / k, coils: 12, label: 'k' });
+    P.pose(s, { body: axle.id, x: 0, y: 0, tx: 0.02, ty: -0.35 }, 60); // lift it to start it bouncing
+    return s;
+  }
+
+  // Peaucellier–Lipkin linkage (1864): the first linkage to draw a perfectly straight line. Two
+  // long arms and a rhombus of four short ones make point P the "inverse" of Q, and as Q runs round
+  // a circle through the fixed pin O, P runs along a straight line. Here P carries a weight on a
+  // spring, and the linkage alone keeps it on the line: no track.
+  function peaucellier() {
+    const s = M.newScene();
+    s.settings.air = 0;
+    const O = [-1.0, 0], r = 0.5, l1 = 1.4, l2 = 0.5, K = l1 * l1 - l2 * l2, phi = 35 * D;
+    const O2 = [O[0] + r, O[1]], Q = [O2[0] + r * Math.cos(phi), O2[1] - r * Math.sin(phi)];
+    const q2 = (Q[0] - O[0]) ** 2 + (Q[1] - O[1]) ** 2, Pp = [O[0] + ((Q[0] - O[0]) * K) / q2, O[1] + ((Q[1] - O[1]) * K) / q2];
+    const A = meet(O, l1, Q, l2, highest), B = meet(O, l1, Q, l2, lowest);
+    const bar = (p, q, lab = '') => rod(s, p, q, { ideal: false, label: lab });
+    const oa = bar(O, A, 'l_1'), ob = bar(O, B), crank = bar(O2, Q, 'r');
+    const aq = bar(A, Q), bq = bar(B, Q), ap = bar(A, Pp, 'l_2'), bp = bar(B, Pp);
+    joint(s, [oa, ob], O, true);
+    pinRods(s, crank, null, O2);
+    joint(s, [crank, aq, bq], Q);
+    joint(s, [oa, aq, ap], A);
+    joint(s, [ob, bq, bp], B);
+    const pen = M.addBody(s, { kind: 'disc', x: Pp[0], y: Pp[1], r: 0.08, mass: 2, color: 'ink', label: 'P', trace: true });
+    joint(s, [ap, bp, pen], Pp);
+    // the weight's spring hangs from above the line; relaxed with the weight at the middle
+    const top = [O[0] + K / (2 * r), -2.2];
+    M.addJoint(s, { kind: 'spring', a: ground(...top), b: { body: pen.id, x: 0, y: 0 }, k: 60, c: 0, rest: 2.2 - (2 * 9.81) / 60, coils: 14, label: 'k' });
+    return s;
+  }
+
+  // Chebyshev's lambda linkage: a four-bar where the end of the long coupler draws a "D" whose
+  // flat side is very nearly straight and is crossed at an almost steady speed. Chebyshev used it
+  // in his walking machine. Proportions 1 : 2 : 2.5 : 2.5, with the foot at twice the coupler length.
+  function chebyshev() {
+    const s = M.newScene();
+    const u = 0.4, A = [-0.4, -0.4], Dp = [A[0] + 2 * u, A[1]];
+    const B = [A[0], A[1] - u], C = meet(B, 2.5 * u, Dp, 2.5 * u, highest), Mf = [B[0] + 2 * (C[0] - B[0]), B[1] + 2 * (C[1] - B[1])];
+    const crank = rod(s, A, B, { ideal: false, label: 'r' });
+    const coupler = rod(s, B, Mf, { ideal: false });
+    const rocker = rod(s, Dp, C, { ideal: false });
+    M.addJoint(s, { kind: 'pivot', a: on(s, crank, ...A), b: ground(...A), motor: 30, torque: 30 });
+    pinRods(s, crank, coupler, B);
+    pinRods(s, coupler, rocker, C);
+    pinRods(s, rocker, null, Dp);
+    const foot = M.addBody(s, { kind: 'disc', x: Mf[0], y: Mf[1], r: 0.05, mass: 0.2, color: 'ink', trace: true });
+    pinRods(s, coupler, foot, Mf);
+    return s;
+  }
+
+  // Pintograph: a drawing toy. Two motor cranks at slightly different speeds (4 : 5) push two
+  // arms that hold a pen where they meet; the pen draws a looping pattern that slowly turns.
+  function pintograph() {
+    const s = M.newScene();
+    s.settings.air = 0;
+    const L1 = [-0.75, 0.6], R1 = [0.75, 0.6], rA = 0.35, rB = 0.42, arm = 1.3;
+    const wheel = (c, r, rpm) => {
+      const d = M.addBody(s, { kind: 'disc', x: c[0], y: c[1], r: r + 0.06, mass: 1, color: 'light' });
+      M.addJoint(s, { kind: 'pivot', a: { body: d.id, x: 0, y: 0 }, b: ground(...c), motor: rpm, torque: 40 });
+      return d;
+    };
+    const wa = wheel(L1, rA, 24), wb = wheel(R1, rB, 30);
+    const pa = [L1[0] + rA, L1[1]], pb = [R1[0] - rB, R1[1]];
+    const pen = meet(pa, arm, pb, arm, highest);
+    const a1 = rod(s, pa, pen, { gscale: 0 }), a2 = rod(s, pb, pen, { gscale: 0 });
+    pinRods(s, wa, a1, pa); pinRods(s, wb, a2, pb);
+    const tip = M.addBody(s, { kind: 'disc', x: pen[0], y: pen[1], r: 0.03, mass: 0.05, gscale: 0, color: 'ink', label: 'P', trace: true });
+    joint(s, [a1, a2, tip], pen);
+    return s;
+  }
+
+  // Whitworth quick-return mechanism, as in a metal shaper: the crank's pin slides in a slotted
+  // lever, the lever swings a link that drives the ram. The cutting stroke takes 240° of the
+  // crank's turn and the return only 120°, so the ram comes back twice as fast as it cuts.
+  function quickReturn() {
+    const s = M.newScene();
+    const Q = [0, 1.2], O = [0, 0.4], r = 0.4, T = [0, -0.8], ramY = -0.68, Lk = 0.9;
+    const base = M.addBody(s, { kind: 'box', x: 0, y: 1.45, w: 2.8, h: 0.2, mass: 10, fixed: true }); // base
+    const crank = M.addBody(s, { kind: 'disc', x: O[0], y: O[1], r: r + 0.08, mass: 3, color: 'light' });
+    M.addJoint(s, { kind: 'pivot', a: { body: crank.id, x: 0, y: 0 }, b: ground(...O), motor: 30, torque: 1500 });
+    const lever = rod(s, Q, T, { ideal: false, mass: 4, label: 'L' });
+    pinRods(s, lever, null, Q);
+    const pinP = [O[0], O[1] - r];
+    const block = M.addBody(s, { kind: 'box', x: pinP[0], y: pinP[1], w: 0.16, h: 0.1, a: -Math.PI / 2, mass: 1, color: 'dark' });
+    pinRods(s, crank, block, pinP);
+    // the block slides along the lever's slot (and keeps the lever's angle)
+    M.addJoint(s, { kind: 'slider', a: on(s, lever, ...pinP), b: { body: block.id, x: 0, y: 0 }, dir: [1, 0], lock: true, angle0: block.a - lever.a, limits: false, lo: -0.6, hi: 0.6 });
+    // a nearly level link from the top of the lever to the ram, which slides along y = ramY
+    const R = [T[0] + Math.sqrt(Lk * Lk - (ramY - T[1]) ** 2), ramY], link = rod(s, T, R, { ideal: false, mass: 1 });
+    pinRods(s, lever, link, T);
+    const ram = M.addBody(s, { kind: 'box', x: R[0] + 0.3, y: R[1] - 0.16, w: 1.2, h: 0.24, mass: 20, label: 'M', color: 'grey' });
+    pinRods(s, link, ram, R);
+    // the ram's slideway is part of the machine's frame (the base), not the floor
+    M.addJoint(s, { kind: 'slider', a: on(s, base, R[0] + 0.3, R[1] - 0.16), b: { body: ram.id, x: 0, y: 0 }, dir: [1, 0], lock: true, limits: false, lo: -1.3, hi: 1.3 });
+    return s;
+  }
+
   ML.Presets = [
     { id: 'frame', name: 'The swinging frame', blurb: 'The mechanism from your video.', build: swingingFrame },
     { id: 'atwood', name: 'Atwood machine', blurb: 'Two masses on a pulley. The heavier one wins, slowly.', build: atwood },
-    { id: 'suspension', name: 'Car suspension', blurb: 'A bumpy road, a spring and a damper. Set the damper to 0 to feel the difference.', build: suspension },
-    { id: 'f1', name: 'F1 front suspension', blurb: 'Double wishbones, pushrods and rockers on a shaker rig, like the ones F1 teams test on.', build: f1Suspension },
     { id: 'double', name: 'Double pendulum', blurb: 'Two rods, total chaos. Never swings the same way twice.', build: doublePendulum },
-    { id: 'fourbar', name: 'Four-bar linkage', blurb: 'A motor turns the crank and the coupler draws a loop.', build: fourBar },
-    { id: 'rodlinkage', name: 'Rod linkage', blurb: 'Three rods pinned end to end, driven by a motor crank.', build: rodLinkage },
-    { id: 'scissor', name: 'Scissor lift', blurb: 'Rods crossed in X shapes and pinned, opened by a piston.', build: scissorLift },
-    { id: 'coupled', name: 'Coupled oscillators', blurb: 'Two blocks passing their energy back and forth through springs.', build: coupledOscillators },
-    { id: 'piston', name: 'Crank and slider', blurb: 'A motor-driven wheel pushing a slider, like an engine in reverse.', build: crankPiston },
     { id: 'springpend', name: 'Spring pendulum', blurb: 'A weight on a spring that swings and bounces at once.', build: springPendulum },
+    { id: 'coupled', name: 'Coupled oscillators', blurb: 'Two blocks passing their energy back and forth through springs.', build: coupledOscillators },
+    { id: 'kapitza', group: 'Vibrations', name: 'Kapitza’s pendulum', blurb: 'An upside-down pendulum that stays up because its pivot shakes fast. Slow the motor and it falls.', build: kapitza },
+    { id: 'coupledpend', group: 'Vibrations', name: 'Coupled pendulums', blurb: 'Two pendulums and a weak spring: the swing passes from one to the other and back.', build: coupledPendulums },
+    { id: 'resonance', group: 'Vibrations', name: 'Resonance', blurb: 'One shaking beam, three springs. Only the one tuned to the shaking builds up big swings.', build: resonance },
+    { id: 'suspension', group: 'Vibrations', name: 'Car suspension', blurb: 'A bumpy road, a spring and a damper. Set the damper to 0 to feel the difference.', build: suspension },
+    { id: 'fourbar', group: 'Linkages', name: 'Four-bar linkage', blurb: 'A motor turns the crank and the coupler draws a loop.', build: fourBar },
+    { id: 'rodlinkage', group: 'Linkages', name: 'Rod linkage', blurb: 'Three rods pinned end to end, driven by a motor crank.', build: rodLinkage },
+    { id: 'piston', group: 'Linkages', name: 'Crank and slider', blurb: 'A motor-driven wheel pushing a slider, like an engine in reverse.', build: crankPiston },
+    { id: 'watt', group: 'Linkages', name: 'Watt’s linkage', blurb: 'Keeps a car’s rear axle going straight up and down. The traced path is nearly a straight line.', build: wattLinkage },
+    { id: 'peaucellier', group: 'Linkages', name: 'Peaucellier–Lipkin linkage', blurb: 'Eight rods that draw an exactly straight line, with no track.', build: peaucellier },
+    { id: 'chebyshev', group: 'Linkages', name: 'Chebyshev lambda linkage', blurb: 'A four-bar whose foot draws a D with a nearly straight, steady flat side.', build: chebyshev },
+    { id: 'pintograph', group: 'Linkages', name: 'Pintograph', blurb: 'A drawing toy: two cranks at different speeds steer a pen into a slowly turning pattern.', build: pintograph },
     { id: 'beam', group: 'Statics', opts: { reactions: true }, name: 'Simply supported beam', blurb: 'A pin, a roller and a 1000 N load. Tap the beam for its shear and moment diagrams.', build: beam },
     { id: 'bracket', group: 'Statics', opts: { reactions: true }, name: 'Wall bracket and cable', blurb: 'A beam held level by a cable. Find the cable tension and the reaction at the wall.', build: bracket },
     { id: 'cantilever', group: 'Statics', opts: { reactions: true }, name: 'Cantilever', blurb: 'Glued into a wall, with a tip load and a couple. The wall pushes back with a moment too.', build: cantilever },
     { id: 'truss', group: 'Statics', opts: { reactions: true }, name: 'Truss bridge', blurb: 'A Warren truss: every member in tension (T) or compression (C). Tap a pin to see the method of joints.', build: truss },
+    { id: 'f1', group: 'Real machines', name: 'F1 front suspension', blurb: 'Double wishbones, pushrods and rockers on a shaker rig, like the ones F1 teams test on.', build: f1Suspension },
+    { id: 'scissor', group: 'Real machines', name: 'Scissor lift', blurb: 'Rods crossed in X shapes and pinned, opened by a piston.', build: scissorLift },
     { id: 'pumpjack', group: 'Real machines', name: 'Oil pumpjack', blurb: 'The nodding donkey: a counterweighted crank rocks the beam and lifts the well rods.', build: pumpjack },
     { id: 'excavator', group: 'Real machines', name: 'Excavator arm', blurb: 'Boom, stick and bucket, each on its own hydraulic cylinder.', build: excavator },
     { id: 'crane', group: 'Real machines', name: 'Tower crane', blurb: 'The trolley runs along the jib and the 500 kg load swings on its cable.', build: towerCrane },
     { id: 'tmd', group: 'Real machines', name: 'Tuned mass damper', blurb: 'Two swaying towers. The one with a pendulum inside (like Taipei 101) calms down fast.', build: tunedMassDamper },
     { id: 'wipers', group: 'Real machines', name: 'Windscreen wipers', blurb: 'A motor crank and two links sweep both wipers together.', build: wipers },
+    { id: 'quickreturn', group: 'Real machines', name: 'Quick-return shaper', blurb: 'Whitworth’s mechanism: the ram cuts slowly and comes back twice as fast. Watch its speed.', build: quickReturn },
     { id: 'strandbeest', group: 'Real machines', name: 'Strandbeest legs', blurb: "Theo Jansen's walking linkage. Watch the feet draw a flat-bottomed stride.", build: strandbeest },
     { id: 'trebuchet', group: 'Real machines', name: 'Trebuchet', blurb: 'A 400 kg counterweight whips a stone round on a sling. Check v_max.', build: trebuchet },
     { id: 'empty', name: 'Blank sheet', blurb: 'Start from nothing.', build: () => M.newScene() },
