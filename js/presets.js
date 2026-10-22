@@ -262,6 +262,81 @@
     return preload(s); // starts with the piston already holding the load
   }
 
+  // ---------- statics ----------
+  // Textbook problems: everything holds still, so the forces are the static answers. Members are
+  // weightless (as the problems say), and the loads are the given P values. Weightless, but with
+  // some mass: a 0.4 kg rod carrying kilonewtons makes the solver's in-between values chatter.
+  const member = (s, p1, p2, label = '', mass = 5) => rod(s, p1, p2, { ideal: false, gscale: 0, mass, label });
+  const P_ = (s, b, p, F, angle = -90, label) => {
+    const e = on(s, b, ...p);
+    return M.addJoint(s, { kind: 'load', a: e, b: { ...e }, F, angle, label: label || M.autoLabel(s, 'load') });
+  };
+  // A roller: the part rides on a level track on the ground and is free to tilt.
+  const roller = (s, b, p) => M.addJoint(s, { kind: 'slider', a: ground(...p), b: on(s, b, ...p), dir: [1, 0], lock: false, limits: false, lo: -0.4, hi: 0.4 });
+  // Several rods meeting at one pin (the first is the hub), optionally pinned to the ground too.
+  function joint(s, rods, p, grounded = false) {
+    rods.slice(1).forEach((r) => pinRods(s, rods[0], r, p));
+    if (grounded) pinRods(s, rods[0], null, p);
+  }
+
+  // Simply supported beam: pinned at A, roller at B, a 1000 N load 1.5 m from A. By moments
+  // about A: R_B = 1000 × 1.5 / 5 = 300 N, so R_A = 700 N. The biggest bending moment is
+  // under the load: 700 × 1.5 = 1050 N·m.
+  function beam() {
+    const s = M.newScene();
+    const b = member(s, [-2.5, 0], [2.5, 0], 'L');
+    pinRods(s, b, null, [-2.5, 0]);
+    roller(s, b, [2.5, 0]);
+    P_(s, b, [-1, 0], 1000);
+    return s;
+  }
+
+  // Wall bracket: a 2 m beam pinned to the wall at A, held level by a cable to a point 1.5 m
+  // above A, with 600 N hanging off the end. Moments about A: T sin θ × 2 = 600 × 2, with
+  // sin θ = 0.6, so T = 1000 N; then A pushes out with 800 N and carries no vertical load.
+  function bracket() {
+    const s = M.newScene();
+    M.addBody(s, { kind: 'box', x: -0.15, y: -0.6, w: 0.3, h: 2.6, mass: 10, fixed: true }); // the wall
+    const b = member(s, [0, 0], [2, 0], 'L');
+    pinRods(s, b, null, [0, 0]);
+    M.addJoint(s, { kind: 'rope', a: ground(0, -1.5), b: on(s, b, 2, 0), length: 2.5 });
+    P_(s, b, [2, 0], 600);
+    return s;
+  }
+
+  // Cantilever: a 3 m beam glued into a wall (a fixed support), 400 N down at the tip and a
+  // 300 N·m anticlockwise couple at the middle. The wall gives 400 N up and an anticlockwise
+  // moment of 400 × 3 − 300 = 900 N·m.
+  function cantilever() {
+    const s = M.newScene();
+    M.addBody(s, { kind: 'box', x: -0.15, y: 0, w: 0.3, h: 1.6, mass: 10, fixed: true });
+    const b = member(s, [0, 0], [3, 0], 'L');
+    M.addJoint(s, { kind: 'weld', a: on(s, b, 0, 0), b: ground(0, 0), angle0: -b.a });
+    P_(s, b, [3, 0], 400);
+    const e = on(s, b, 1.5, 0);
+    M.addJoint(s, { kind: 'couple', a: e, b: { ...e }, M: 300, label: 'C_1' });
+    return s;
+  }
+
+  // Warren truss bridge: 8 m span, 2 m bays, 1.7 m deep, pinned at the left end and on a roller
+  // at the right, with 2 kN on each of the three inner deck joints. Every member is a two-force
+  // member: T is tension, C compression. The middle of the bottom chord pulls hardest.
+  function truss() {
+    const s = M.newScene();
+    const H = 1.7, bot = [0, 1, 2, 3, 4].map((i) => [-4 + 2 * i, 0]), top = [0, 1, 2, 3].map((i) => [-3 + 2 * i, -H]);
+    const chordB = [0, 1, 2, 3].map((i) => member(s, bot[i], bot[i + 1]));
+    const chordT = [0, 1, 2].map((i) => member(s, top[i], top[i + 1]));
+    const up = [0, 1, 2, 3].map((i) => member(s, bot[i], top[i]));       // diagonals rising to the right
+    const down = [0, 1, 2, 3].map((i) => member(s, top[i], bot[i + 1])); // and falling
+    joint(s, [chordB[0], up[0]], bot[0], true);
+    for (let i = 1; i < 4; i++) joint(s, [chordB[i - 1], chordB[i], down[i - 1], up[i]], bot[i]);
+    joint(s, [chordB[3], down[3]], bot[4]);
+    roller(s, chordB[3], bot[4]);
+    for (let i = 0; i < 4; i++) joint(s, [up[i], down[i], ...(i > 0 ? [chordT[i - 1]] : []), ...(i < 3 ? [chordT[i]] : [])], top[i]);
+    for (let i = 1; i < 4; i++) P_(s, chordB[i - 1], bot[i], 2000);
+    return s;
+  }
+
   // ---------- real machines ----------
 
   // A shape given by its corners in world coordinates.
@@ -511,6 +586,10 @@
     { id: 'coupled', name: 'Coupled oscillators', blurb: 'Two blocks passing their energy back and forth through springs.', build: coupledOscillators },
     { id: 'piston', name: 'Crank and slider', blurb: 'A motor-driven wheel pushing a slider, like an engine in reverse.', build: crankPiston },
     { id: 'springpend', name: 'Spring pendulum', blurb: 'A weight on a spring that swings and bounces at once.', build: springPendulum },
+    { id: 'beam', group: 'Statics', opts: { reactions: true }, name: 'Simply supported beam', blurb: 'A pin, a roller and a 1000 N load. Tap the beam for its shear and moment diagrams.', build: beam },
+    { id: 'bracket', group: 'Statics', opts: { reactions: true }, name: 'Wall bracket and cable', blurb: 'A beam held level by a cable. Find the cable tension and the reaction at the wall.', build: bracket },
+    { id: 'cantilever', group: 'Statics', opts: { reactions: true }, name: 'Cantilever', blurb: 'Glued into a wall, with a tip load and a couple. The wall pushes back with a moment too.', build: cantilever },
+    { id: 'truss', group: 'Statics', opts: { reactions: true }, name: 'Truss bridge', blurb: 'A Warren truss: every member in tension (T) or compression (C). Tap a pin to see the method of joints.', build: truss },
     { id: 'pumpjack', group: 'Real machines', name: 'Oil pumpjack', blurb: 'The nodding donkey: a counterweighted crank rocks the beam and lifts the well rods.', build: pumpjack },
     { id: 'excavator', group: 'Real machines', name: 'Excavator arm', blurb: 'Boom, stick and bucket, each on its own hydraulic cylinder.', build: excavator },
     { id: 'crane', group: 'Real machines', name: 'Tower crane', blurb: 'The trolley runs along the jib and the 500 kg load swings on its cable.', build: towerCrane },

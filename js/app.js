@@ -15,7 +15,10 @@
     drag: null,      // the hand while running: { body, x, y (grabbed point), tx, ty (pointer), k, c }
     poseDrag: null,  // the same while paused (posing, no forces)
     hand: null, follow: null, followPt: null, // what the renderer draws for those
-    opts: { values: true, labels: true, grid: false, snapGrid: false },
+    opts: { values: true, labels: true, grid: false, snapGrid: false, reactions: false, fbd: false, comp: true },
+    probe: null,     // the point last tapped on a part, in its own frame: { body, x, y }
+    pairFrom: null,  // "Compare with another part": waiting for the second tap
+    an: null,        // the scene the force read-outs come from (see analysis())
     traces: new Map(), spawn: new Map(), freshTags: true,
     records: { speed: 0, force: 0 }, // the scoreboard, since the last reset
     design: null,  // the scene as it was when Play was last pressed (Reset goes back to it)
@@ -108,6 +111,7 @@
 
   function select(item) {
     S.selected = item; S.hover = null;
+    if (!item || !M.isBody(item) || (S.probe && S.probe.body !== item.id)) S.probe = null;
     ML.Inspector.refresh();
   }
 
@@ -157,6 +161,7 @@
     S.selected = null; follow(null); ML.Editor.cancel();
     fitView(); changed();
     if (autoplay && S.scene.bodies.length) play();
+    if (pr.opts) { Object.assign(S.opts, pr.opts); saveOpts(); } // e.g. statics examples show their support reactions
     if (pr.id !== 'empty') hint(pr.blurb, 5000);
   }
 
@@ -202,6 +207,23 @@
     $('gravity-label').textContent = p ? p[0] : `${g.toFixed(2)} m/s²`;
   }
 
+  // ---------- forces for the read-outs ----------
+
+  // Running, the scene itself has the forces (averaged over each frame). Paused, nothing has
+  // been worked out for this exact pose, so one frame is run on a copy (ML.Forces.snapshot) and
+  // kept until something changes: the forces at this instant, which for a structure that can't
+  // move are its static loads.
+  let snapKey = null, snapScene = null;
+  function analysis() {
+    const want = !!(S.selected || S.opts.reactions);
+    S.scene._wantEnds = want;
+    if (!want) return null;
+    if (S.running) return S.scene;
+    const key = M.serialize(S.scene);
+    if (key !== snapKey) { snapKey = key; snapScene = ML.Forces.snapshot(S.scene); }
+    return snapScene;
+  }
+
   // ---------- the loop ----------
 
   function advance(dt) {
@@ -222,7 +244,7 @@
       if (tr.length > 1600) tr.splice(0, tr.length - 1500);
       S.traces.set(b.id, tr);
     }
-    for (const j of S.scene.joints) rec.force = Math.max(rec.force, Math.abs(j._f || 0));
+    for (const j of S.scene.joints) rec.force = Math.max(rec.force, Math.abs(j._avg ? j._avg.f : j._f || 0));
   }
 
   let canvas, ctx, last = performance.now(), frameN = 0;
@@ -254,6 +276,10 @@
     const held = S.drag || S.poseDrag, hb = held && S.scene._byId.get(held.body);
     S.hand = hb ? { from: P.toWorld(hb, held.x, held.y), to: [held.tx, held.ty], F: S.drag ? S.drag._F || 0 : null } : null;
     S.freshTags = frameN++ % 6 === 0;
+    if (S.freshTags || S.running) S.an = analysis();
+    S.fbd = S.opts.fbd && S.selected && M.isBody(S.selected) && S.an ? S.selected.id : null;
+    const pb = S.probe && S.scene._byId.get(S.probe.body);
+    S.probePt = pb ? P.toWorld(pb, S.probe.x, S.probe.y) : null;
     if (S.freshTags) {
       ML.Inspector.tick();
       $('st-time').textContent = `${S.scene.time.toFixed(1)} s`;
@@ -323,6 +349,7 @@
     const item = (label, fn) => el('button', { type: 'button', class: 'tb', onclick: () => { closePops(); fn(); } }, label);
     pop.replaceChildren(
       optSwitch('values', 'Live values'), optSwitch('labels', 'Textbook labels'),
+      optSwitch('reactions', 'Support reactions and rod forces'),
       optSwitch('grid', 'Grid'), optSwitch('snapGrid', 'Snap to grid'),
       el('hr', {}),
       item('Fit everything on screen', fitView),
@@ -407,7 +434,7 @@
     else if (k === 's') toggleSlowmo();
     else if (k === 'f') fitView();
     else if (e.key === 'Escape') { closePops(); select(null); setTool('select'); if (S.follow) follow(null); }
-    else if ((e.key === 'Delete' || e.key === 'Backspace') && S.selected) {
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && S.selected && S.selected.kind !== 'pair') {
       e.preventDefault(); checkpoint(); M.remove(S.scene, S.selected); select(null); changed();
     } else if (/^[0-9]$/.test(e.key)) setTool(TOOLS[(+e.key + 9) % 10]);
     else if (e.key === '+' || e.key === '=') ML.Editor.zoomAt(V.W / 2, V.H / 2, V.zoom * 1.25);
@@ -467,7 +494,7 @@
     requestAnimationFrame(frame);
   }
 
-  const App = { S, checkpoint, changed, tweak, touched, spawn, select, pause, play, hint, saveOpts, follow };
+  const App = { S, checkpoint, changed, tweak, touched, spawn, select, pause, play, hint, saveOpts, follow, analysis: () => S.an };
   ML.App = App;
 
   // Keep the build across live updates of this page.
