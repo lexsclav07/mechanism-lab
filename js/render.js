@@ -158,6 +158,29 @@
     return [x0, y - size * 0.6, x0 + wb + wsub, y + size * 0.7];
   }
 
+  // A force arrow with its head at screen point s, coming in along unit direction d (screen).
+  function arrowTo(ctx, s, d, len, color = C.ink, width = 2) {
+    const t = [s[0] - d[0] * len, s[1] - d[1] * len], hl = Math.min(10, len * 0.45), hw = hl * 0.45;
+    const b = [s[0] - d[0] * hl, s[1] - d[1] * hl];
+    ctx.beginPath(); ctx.moveTo(t[0], t[1]); ctx.lineTo(b[0], b[1]);
+    ctx.lineWidth = width; ctx.lineCap = 'butt'; ctx.strokeStyle = color; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(s[0], s[1]); ctx.lineTo(b[0] - d[1] * hw, b[1] + d[0] * hw); ctx.lineTo(b[0] + d[1] * hw, b[1] - d[0] * hw); ctx.closePath();
+    ctx.fillStyle = color; ctx.fill();
+    return t;
+  }
+
+  // A moment: an arc round s with an arrowhead, anticlockwise on screen when ccw.
+  function momentArc(ctx, s, r, ccw, color = C.ink, width = 1.8) {
+    const a0 = Math.PI * 0.75, sweep = Math.PI * 1.5, a1 = ccw ? a0 - sweep : a0 + sweep;
+    ctx.beginPath(); ctx.arc(s[0], s[1], r, a0, a1, ccw);
+    ctx.lineWidth = width; ctx.strokeStyle = color; ctx.stroke();
+    const tip = [s[0] + r * Math.cos(a1), s[1] + r * Math.sin(a1)], dir = ccw ? 1 : -1;
+    const tg = [-Math.sin(a1) * -dir, Math.cos(a1) * -dir], q = [Math.cos(a1), Math.sin(a1)]; // tangent the way it turns
+    ctx.beginPath(); ctx.moveTo(tip[0] + tg[0] * 7, tip[1] + tg[1] * 7);
+    ctx.lineTo(tip[0] + q[0] * 4, tip[1] + q[1] * 4); ctx.lineTo(tip[0] - q[0] * 4, tip[1] - q[1] * 4); ctx.closePath();
+    ctx.fillStyle = color; ctx.fill();
+  }
+
   // ---------- bodies ----------
 
   function drawBody(ctx, b) {
@@ -369,6 +392,21 @@
     pin(ctx, s);
   }
 
+  // Applied loads, as in a statics figure: a bold arrow pointing at the point it acts on,
+  // and a curved arrow for a couple.
+  const LOAD_LEN = 46;
+  function drawLoad(ctx, scene, j) {
+    const s = ws(P.endWorld(scene, j.a));
+    if (j.kind === 'couple') { momentArc(ctx, s, 16, j.M >= 0, C.ink, 2); dot(ctx, s, 2.4); return; }
+    const [fx, fy] = P.loadVector(scene, j), F = Math.hypot(fx, fy);
+    if (F < 1e-9) { dot(ctx, s, 3); return; }
+    arrowTo(ctx, s, [fx / F, fy / F], LOAD_LEN, C.ink, 2.4);
+  }
+  const loadTail = (scene, j) => {
+    const s = ws(P.endWorld(scene, j.a)), [fx, fy] = P.loadVector(scene, j), F = Math.hypot(fx, fy) || 1;
+    return [s[0] - (fx / F) * LOAD_LEN, s[1] - (fy / F) * LOAD_LEN];
+  };
+
   const DRAW = { spring: drawSpring, damper: drawDamper, rod: drawRod, rope: drawRope, piston: drawPiston, pulley: drawPulley };
   let anchorsDrawn = new Set();
 
@@ -415,6 +453,10 @@
     if ((ny < 0 || (ny === 0 && nx > 0)) === (side > 0)) { nx = -nx; ny = -ny; }
     return [s1, s2, nx, ny];
   }
+
+  // A joint's force or torque averaged over the last frame (steadier than the last substep's).
+  const fa = (j) => (j._avg ? j._avg.f : j._f || 0);
+  const ta = (j) => (j._avg ? j._avg.torque : j._torque || 0);
 
   const num = (v) => {
     const a = Math.abs(v), t = a >= 100 ? a.toFixed(0) : a >= 10 ? a.toFixed(1) : a.toFixed(2);
@@ -467,24 +509,30 @@
       if (!show(j)) continue;
       if (j.kind === 'rod' && manyRods && j !== ui.selected && j !== ui.hover) continue;
       if (j.kind === 'pulley') {
-        if (!run || !j._f) continue;
+        if (!run || !fa(j)) continue;
         const c = ws(P.endWorld(scene, j.p));
-        note(ctx, 'T', `${num(j._f)} N`, c[0], c[1] + j.r * View.ppm() + 16);
+        note(ctx, 'T', `${num(fa(j))} N`, c[0], c[1] + j.r * View.ppm() + 16);
         continue;
       }
       if (j.kind === 'pivot' || j.kind === 'weld') {
         if (!j.motor) continue;
         const s = ws(P.endWorld(scene, j.a));
-        if (run) note(ctx, 'τ', `${num(Math.abs(j._torque || 0))} N·m`, s[0], s[1] + 30);
+        if (run) note(ctx, 'τ', `${num(Math.abs(ta(j)))} N·m`, s[0], s[1] + 30);
         else note(ctx, 'n', `${j.motor} rpm`, s[0], s[1] + 30);
+        continue;
+      }
+      if (j.kind === 'load' || j.kind === 'couple') { // the given values, shown even while paused
+        const s = j.kind === 'load' ? loadTail(scene, j) : ws(P.endWorld(scene, j.a));
+        if (j.kind === 'load') note(ctx, j.label || 'P', `${num(j.F)} N`, s[0], s[1] - 12);
+        else note(ctx, j.label || 'C', `${num(Math.abs(j.M))} N·m`, s[0], s[1] - 30);
         continue;
       }
       if (!DRAW[j.kind]) continue;
       let sym = 'F', F;
-      if (j.kind === 'spring') F = run ? j._f || 0 : j.k * (P.jointLength(scene, j) - j.rest); // paused: no damping part
+      if (j.kind === 'spring') F = run ? fa(j) : j.k * (P.jointLength(scene, j) - j.rest); // paused: no damping part
       else if (!run) continue;
-      else if (j.kind === 'rope') { sym = 'T'; F = j._f || 0; if (F < 0.05) continue; }
-      else F = j._f || 0;
+      else if (j.kind === 'rope') { sym = 'T'; F = fa(j); if (F < 0.05) continue; }
+      else F = fa(j);
       if (j.kind !== 'spring' && Math.abs(F) < 0.05) continue;
       const [s1, s2, nx, ny] = sides(scene, j, 1);
       const off = j.kind === 'spring' || j.kind === 'damper' ? 22 : j.kind === 'piston' ? 20 : 14;
@@ -503,7 +551,8 @@
 
   // The draggable points of a joint (handles in the editor).
   function jointHandles(scene, j) {
-    if (j.kind === 'pivot' || j.kind === 'weld') return [['ab', P.endWorld(scene, j.a)]];
+    if (j.kind === 'pair') return [];
+    if (j.kind === 'pivot' || j.kind === 'weld' || j.kind === 'load' || j.kind === 'couple') return [['ab', P.endWorld(scene, j.a)]];
     if (j.kind === 'slider') return [];
     const out = [['a', P.endWorld(scene, j.a)], ['b', P.endWorld(scene, j.b)]];
     if (j.kind === 'pulley') out.push(['p', P.endWorld(scene, j.p)]);
@@ -513,6 +562,8 @@
   function jointPath(ctx, scene, j) {
     ctx.beginPath();
     if (j.kind === 'pivot' || j.kind === 'weld') { const s = ws(P.endWorld(scene, j.a)); ctx.arc(s[0], s[1], 9, 0, TAU); return; }
+    if (j.kind === 'couple') { const s = ws(P.endWorld(scene, j.a)); ctx.arc(s[0], s[1], 20, 0, TAU); return; }
+    if (j.kind === 'load') { const s = ws(P.endWorld(scene, j.a)), t = loadTail(scene, j); ctx.moveTo(...s); ctx.lineTo(...t); return; }
     if (j.kind === 'pulley') {
       const c = ws(P.endWorld(scene, j.p)), a = ws(P.endWorld(scene, j.a)), b = ws(P.endWorld(scene, j.b));
       ctx.moveTo(c[0] + j.r * View.ppm() + 4, c[1]); ctx.arc(c[0], c[1], j.r * View.ppm() + 4, 0, TAU);
@@ -528,6 +579,7 @@
   }
 
   function highlight(ctx, scene, item, strong) {
+    if (item.kind === 'pair') { highlight(ctx, scene, item.a, strong); highlight(ctx, scene, item.b, strong); return; }
     ctx.save();
     ctx.globalAlpha = strong ? 1 : 0.45; ctx.strokeStyle = C.accent; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     if (item.mass != null) { // a body (joints have no mass)
@@ -536,7 +588,7 @@
       ctx.stroke();
     } else {
       jointPath(ctx, scene, item);
-      const wide = item.kind === 'spring' || item.kind === 'damper' || item.kind === 'piston' || item.kind === 'rod';
+      const wide = item.kind === 'spring' || item.kind === 'damper' || item.kind === 'piston' || item.kind === 'rod' || item.kind === 'load';
       ctx.lineWidth = wide ? 18 : 3;
       if (wide) ctx.globalAlpha *= 0.18;
       ctx.stroke();
@@ -549,6 +601,88 @@
       }
     }
     ctx.restore();
+  }
+
+  // ---------- engineering mechanics overlays ----------
+
+  // Force arrows for a free-body diagram or a support: each arrow points at the spot the force
+  // acts on, sized by how big it is next to the biggest one shown. With comp, each force is
+  // drawn as its x and y parts (R_Ax, R_Ay) as you'd write them in a statics answer.
+  function forceSet(ctx, list, comp, color) {
+    const big = Math.max(1e-9, ...list.map((it) => Math.hypot(it.f[0], it.f[1])));
+    const len = (F) => 22 + 48 * Math.min(1, Math.abs(F) / big);
+    for (const it of list) {
+      const s = ws(it.p), F = Math.hypot(it.f[0], it.f[1]);
+      const sub = (sym, x) => (sym.includes('_') ? sym + x : sym + '_' + x);
+      if (comp && it.kind !== 'weight') {
+        for (const [k, v, d] of [['x', it.f[0], [Math.sign(it.f[0]), 0]], ['y', -it.f[1], [0, Math.sign(it.f[1])]]]) {
+          if (Math.abs(v) < big * 0.004) continue;
+          const t = arrowTo(ctx, s, d, len(v), color, 1.8);
+          note(ctx, sub(it.sym, k), `${num(Math.abs(v))} N`, t[0] - d[0] * 6, t[1] - d[1] * 6 + (k === 'x' ? -10 : 0), color);
+        }
+      } else if (F > big * 0.004) {
+        const d = [it.f[0] / F, it.f[1] / F], t = arrowTo(ctx, s, d, len(F), color, 1.8);
+        note(ctx, it.sym, `${num(F)} N`, t[0] - d[0] * 8, t[1] - d[1] * 8 - 4, color);
+      }
+      if (it.mz && Math.abs(it.mz) > 1e-6 && it.kind !== 'drag') {
+        momentArc(ctx, s, 18, it.mz > 0, color, 1.6);
+        note(ctx, it.msym || it.sym, `${num(Math.abs(it.mz))} N·m`, s[0], s[1] + 34, color);
+      }
+    }
+  }
+
+  // Free-body diagram: everything else fades back; the part and the forces on it stand out.
+  function drawFBD(ctx, an, ui) {
+    const b = an._byId && an._byId.get(ui.fbd);
+    if (!b) return;
+    ctx.save(); ctx.globalAlpha = 0.82; ctx.fillStyle = C.paper; ctx.fillRect(0, 0, View.W, View.H); ctx.restore();
+    if (b.kind === 'bar') drawBar(ctx, b); else drawBody(ctx, b);
+    const items = ML.Forces.onBody(an, b, ui.drag);
+    placed = [];
+    forceSet(ctx, items.filter((it) => it.kind !== 'weight' && it.kind !== 'drag'), ui.opts.comp, C.accent);
+    forceSet(ctx, items.filter((it) => it.kind === 'weight'), false, C.ink);
+    dot(ctx, View.w2s(b.x, b.y), 3);
+    label(ctx, 'G', ...View.w2s(b.x, b.y).map((v, i) => v + (i ? -10 : 6)), 'left', 13);
+  }
+
+  // Statics view: the reaction at every ground support, and tension or compression in every rod.
+  function drawReactions(ctx, an) {
+    const done = [];
+    for (const j of an.joints) {
+      if ((j.kind !== 'pivot' && j.kind !== 'weld') || (j.a.body != null && j.b.body != null)) continue;
+      const p = P.endWorld(an, j.a);
+      if (done.some((q) => Math.hypot(q[0] - p[0], q[1] - p[1]) < 1e-4)) continue;
+      done.push(p);
+      const pin = ML.Forces.atPin(an, p);
+      if (!pin.reaction) continue;
+      forceSet(ctx, [{ sym: 'R', msym: 'M', kind: 'reaction', p, f: pin.reaction.f, mz: pin.reaction.weld ? pin.reaction.mz : 0 }], true, C.accent);
+    }
+    for (const j of an.joints) { // tracks on the ground are roller supports
+      if (j.kind !== 'slider' || j.a.body != null) continue;
+      const B = P.bodyOf(an, j.b);
+      if (!B) continue;
+      const it = ML.Forces.forcesFrom(an, j).find((x) => x.body === B.id);
+      if (it) forceSet(ctx, [{ sym: 'R', msym: 'M', kind: 'reaction', p: it.p, f: it.f, mz: j.lock ? it.mz : 0 }], true, C.accent);
+    }
+    for (const b of an.bodies) {
+      if (b.kind !== 'bar') continue;
+      const sec = ML.Forces.section(an, b, ML.Forces.onBody(an, b), 8);
+      if (!sec) continue;
+      const N = sec.at(0).N;
+      if (Math.abs(N) < 0.05) continue;
+      const s1 = ws(P.toWorld(b, -b.L / 2, 0)), s2 = ws(P.toWorld(b, b.L / 2, 0));
+      let [nx, ny] = norm(-(s2[1] - s1[1]), s2[0] - s1[0]);
+      if (ny < 0 || (ny === 0 && nx > 0)) { nx = -nx; ny = -ny; }
+      note(ctx, N > 0 ? 'T' : 'C', `${num(Math.abs(N))} N`, (s1[0] + s2[0]) / 2 + nx * 14, (s1[1] + s2[1]) / 2 + ny * 14, C.accent, nx);
+    }
+  }
+
+  // Where you tapped on the selected part (its numbers are on the card).
+  function drawProbe(ctx, p) {
+    const s = ws(p);
+    ctx.beginPath();
+    for (const [dx, dy] of [[1, 1], [-1, -1], [1, -1], [-1, 1]]) { ctx.moveTo(s[0] + dx * 3, s[1] + dy * 3); ctx.lineTo(s[0] + dx * 8, s[1] + dy * 8); }
+    ctx.lineWidth = 1.6; ctx.strokeStyle = C.accent; ctx.stroke();
   }
 
   // ---------- grid, traces, overlays ----------
@@ -657,10 +791,14 @@
       if (kind === 'rod') for (const b of scene.bodies) if (b.kind === 'bar') popped(b, drawBar);
     }
     for (const j of scene.joints) if (j.kind === 'pivot' || j.kind === 'weld' || j.kind === 'slider') drawJointMark(ctx, scene, j);
+    for (const j of scene.joints) if (j.kind === 'load' || j.kind === 'couple') drawLoad(ctx, scene, j);
     if (ui.opts.labels) drawLabels(ctx, scene);
     if (ui.opts.values) drawValues(ctx, scene, ui);
-    if (ui.hover && ui.hover !== ui.selected) highlight(ctx, scene, ui.hover, false);
-    if (ui.selected) highlight(ctx, scene, ui.selected, true);
+    if (ui.opts.reactions && ui.an && !ui.fbd) drawReactions(ctx, ui.an);
+    if (ui.fbd && ui.an) drawFBD(ctx, ui.an, ui);
+    if (ui.probePt) drawProbe(ctx, ui.probePt);
+    if (ui.hover && ui.hover !== ui.selected && !ui.fbd) highlight(ctx, scene, ui.hover, false);
+    if (ui.selected && !ui.fbd) highlight(ctx, scene, ui.selected, true);
     if (ui.preview) ui.preview(ctx);
     if (ui.snap) drawSnap(ctx, ui.snap);
     if (ui.followPt) drawFollow(ctx, ui.followPt);
@@ -671,6 +809,6 @@
   ML.Render = {
     View, readColors, render, jointHandles, colors: () => C, FILLS,
     // primitives the editor reuses for tool previews
-    bodyPath, drawBody, coil, pin, support, dot, label, ws,
+    bodyPath, drawBody, coil, pin, support, dot, label, ws, arrowTo, momentArc,
   };
 })();

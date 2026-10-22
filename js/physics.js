@@ -81,6 +81,13 @@
     b._I = Math.max(inertia(b), 1e-9);
     b._invM = b.fixed ? 0 : 1 / b.mass;
     b._invI = b.fixed ? 0 : 1 / b._I;
+    // Give every body all of the solver's scratch fields up front, in one order. Fields added
+    // later, mid-run, change the object's hidden "shape" in the JavaScript engine, and once the
+    // engine has seen a few shapes it stops optimising the solver loops (about 2× slower).
+    if (b._ax === undefined) {
+      b._fx = b._fy = b._t = 0; b._px = b.x; b._py = b.y; b._pa = b.a; b._f = 0;
+      b._facc = 0; b._favg = 0; b._v0 = [0, 0, 0]; b._ax = b._ay = b._aa = 0; b._p0 = [0, 0, 0]; b._vf = [0, 0, 0];
+    }
   }
 
   // ---------- frames ----------
@@ -181,7 +188,7 @@
   // for a real rod with one pin at each end it's worked out from the two pin forces.
   // Returns null when that isn't defined (no pins, or pins along the rod).
   function barAxial(scene, b) {
-    if (b._red) return b._f || 0;
+    if (b._red) return b._favg || b._f || 0;
     const pins = scene.joints.filter((j) => (j.kind === 'pivot' || j.kind === 'weld') && (j.a.body === b.id || j.b.body === b.id));
     if (pins.length !== 2) return null;
     const ux = Math.cos(b.a), uy = Math.sin(b.a);
@@ -189,7 +196,8 @@
     for (const j of pins) {
       const mine = j.a.body === b.id ? j.a : j.b, sg = mine === j.a ? 1 : -1;
       if (Math.abs(Math.abs(mine.x) - b.L / 2) > 1e-6) return null;
-      const F = sg * ((j._fx || 0) * ux + (j._fy || 0) * uy);
+      const fx = j._avg ? j._avg.fx : j._fx || 0, fy = j._avg ? j._avg.fy : j._fy || 0; // averaged over the frame
+      const F = sg * (fx * ux + fy * uy);
       if (mine.x < 0) FA = F; else FB = F;
     }
     return FA == null || FB == null ? null : (FB - FA) / 2;
@@ -345,7 +353,7 @@
   function solvePulley(scene, j, h) {
     const A = bodyOf(scene, j.a), B = bodyOf(scene, j.b), Wh = bodyOf(scene, j.p);
     const G = pulleyGeom(scene, j);
-    j._f = 0; j._d1 = G.f1; // _d1 turns the wheel's spokes in the drawing
+    j._f = 0; j._d1 = G.f1; j._ja = [0, 0]; j._jb = [0, 0]; // _d1 turns the wheel's spokes in the drawing
     const c = G.length - j.length;
     if (c <= 0) return; // slack
     const parts = [[A, arm(A, G.pA), G.g1], [B, arm(B, G.pB), G.g2], [Wh, arm(Wh, G.c), [-G.g1[0] - G.g2[0], -G.g1[1] - G.g2[1]]]];
@@ -365,9 +373,10 @@
     j._f = lam / (h * h); // rope tension
     // a load hauled right up to the wheel jams against it instead of going round it
     const G2 = pulleyGeom(scene, j), fmin = 0.1;
-    for (const [b, f, g, pE] of [[A, G2.f1, G2.g1, G2.pA], [B, G2.f2, G2.g2, G2.pB]]) {
+    for (const [b, f, g, pE, rec] of [[A, G2.f1, G2.g1, G2.pA, j._ja], [B, G2.f2, G2.g2, G2.pB, j._jb]]) {
       if (!b || f >= fmin) continue;
-      applyPos(b, pE[0] - b.x, pE[1] - b.y, Wh, Wh ? G2.c[0] - Wh.x : 0, Wh ? G2.c[1] - Wh.y : 0, g[0] * (fmin - f), g[1] * (fmin - f), 0, h);
+      const lam = applyPos(b, pE[0] - b.x, pE[1] - b.y, Wh, Wh ? G2.c[0] - Wh.x : 0, Wh ? G2.c[1] - Wh.y : 0, g[0] * (fmin - f), g[1] * (fmin - f), 0, h);
+      rec[0] = (lam * g[0]) / (h * h); rec[1] = (lam * g[1]) / (h * h); // the wheel pushing the jammed end away
     }
   }
 
@@ -489,6 +498,9 @@
     let r = offs(q, f.pB);
     const lam = applyPos(A, r[0], r[1], B, r[2], r[3], -f.e * f.uy, f.e * f.ux, 0, h);
     j._f = lam / (h * h);
+    // the force on side a as a vector: the rail pushes square to itself (sign follows the gap)
+    const sg = f.e > 0 ? 1 : -1;
+    j._fx = -sg * f.uy * j._f; j._fy = sg * f.ux * j._f; j._m = 0;
 
     // 2. end stops
     if (j.limits) {
@@ -497,11 +509,13 @@
       if (sc !== f.s) {
         q = [f.pA[0] + sc * f.ux, f.pA[1] + sc * f.uy];
         r = offs(q, f.pB);
-        applyPos(A, r[0], r[1], B, r[2], r[3], (f.s - sc) * f.ux, (f.s - sc) * f.uy, 0, h);
+        const lamS = applyPos(A, r[0], r[1], B, r[2], r[3], (f.s - sc) * f.ux, (f.s - sc) * f.uy, 0, h);
+        const sg = f.s > sc ? 1 : -1; // the end stop pushes along the rail
+        j._fx += (sg * f.ux * lamS) / (h * h); j._fy += (sg * f.uy * lamS) / (h * h);
       }
     }
     // 3. no rotation relative to the rail (a "prismatic" joint) unless unlocked (pin in a slot)
-    if (j.lock) applyAng(A, B, angleOf(scene, j.b) - angleOf(scene, j.a) - j.angle0, 0, h);
+    if (j.lock) j._m = applyAng(A, B, angleOf(scene, j.b) - angleOf(scene, j.a) - j.angle0, 0, h) / (h * h);
     j._s = frame().s;
   }
 
@@ -517,7 +531,8 @@
       j._f = joinEnds(scene, j.a, j.b, h, j) / (h * h);
     } else if (j.kind === 'weld') {
       j._f = joinEnds(scene, j.a, j.b, h, j) / (h * h);
-      applyAng(bodyOf(scene, j.a), bodyOf(scene, j.b), angleOf(scene, j.b) - angleOf(scene, j.a) - j.angle0, 0, h);
+      // _m: the moment the glue puts on side a (+ turns it clockwise on screen, like angles here)
+      j._m = applyAng(bodyOf(scene, j.a), bodyOf(scene, j.b), angleOf(scene, j.b) - angleOf(scene, j.a) - j.angle0, 0, h) / (h * h);
     } else if (j.kind === 'rod') {
       j._f = distance(scene, j, j.length, h, 'rod');
     } else if (j.kind === 'rope') {
@@ -589,6 +604,64 @@
     j._f = (j.kind === 'spring' ? j._f : 0) + F;
   }
 
+  // Applied loads, as in a statics problem: a point force P (newtons, at angle `angle` in degrees
+  // measured anticlockwise from the +x axis, textbook style, so -90 is straight down) and a
+  // couple M (N·m, + anticlockwise). follow = the load turns with the part it's on.
+  function loadVector(scene, j) {
+    const b = bodyOf(scene, j.a), th = (j.angle * Math.PI) / 180 - (j.follow && b ? b.a : 0);
+    return [j.F * Math.cos(th), -j.F * Math.sin(th)]; // world y points down
+  }
+
+  function applyLoad(scene, j) {
+    const b = bodyOf(scene, j.a);
+    if (!b) return;
+    if (j.kind === 'couple') { b._t -= j.M; return; } // anticlockwise on screen is -angle here
+    const p = endWorld(scene, j.a), [fx, fy] = loadVector(scene, j);
+    b._fx += fx; b._fy += fy; b._t += (p[0] - b.x) * fy - (p[1] - b.y) * fx;
+  }
+
+  // The force (world vector f at world point p) and couple (mz, anticlockwise +) a joint puts on
+  // each thing it touches, from the values its solver recorded. body is null for the ground.
+  // Always the same number of ends for a joint kind, so they can be averaged over a frame.
+  function endForces(scene, j) {
+    const out = [];
+    const end = (e, f, mz, kind, p) => out.push({ body: e.body ?? null, p: p || endWorld(scene, e), f, mz: mz || 0, kind });
+    if (j._ideal || j._skip) { // a pin on a massless rod: the rod pulls straight along itself
+      const b = j._ideal || j._skip, F = b._f || 0;
+      const mine = j.a.body === b.id ? j.a : j.b, far = mine === j.a ? j.b : j.a;
+      const other = far === b._red.farA ? b._red.farB : b._red.farA;
+      const pf = endWorld(scene, far), po = endWorld(scene, other), L = Math.hypot(po[0] - pf[0], po[1] - pf[1]) || 1;
+      const u = [(po[0] - pf[0]) / L, (po[1] - pf[1]) / L];
+      end(far, [F * u[0], F * u[1]], 0, 'pin', pf);
+      end(mine, [-F * u[0], -F * u[1]], 0, 'pin', pf);
+    } else if (j.kind === 'pivot' || j.kind === 'weld') {
+      // _m is the glue's moment on side a in screen sense; a motor puts -τ on a and +τ on b
+      const f = [j._fx || 0, j._fy || 0], m = j.kind === 'weld' ? j._m || 0 : 0, tau = j.motor ? j._torque || 0 : 0;
+      const kind = j.motor ? 'motor' : j.kind;
+      end(j.a, f, -m + tau, kind);
+      end(j.b, [-f[0], -f[1]], m - tau, kind);
+    } else if (j.kind === 'slider') {
+      const f = [j._fx || 0, j._fy || 0], m = j.lock ? j._m || 0 : 0, p = endWorld(scene, j.b);
+      end(j.a, f, -m, 'slider', p);
+      end(j.b, [-f[0], -f[1]], m, 'slider', p);
+    } else if (j.kind === 'spring' || j.kind === 'damper' || j.kind === 'rope' || j.kind === 'piston' || j.kind === 'rod') {
+      const pa = endWorld(scene, j.a), pb = endWorld(scene, j.b), L = Math.hypot(pb[0] - pa[0], pb[1] - pa[1]);
+      const F = L > 1e-9 ? j._f || 0 : 0, n = L > 1e-9 ? [(pb[0] - pa[0]) / L, (pb[1] - pa[1]) / L] : [0, 0]; // F > 0 pulls the ends together
+      end(j.a, [F * n[0], F * n[1]], 0, j.kind, pa);
+      end(j.b, [-F * n[0], -F * n[1]], 0, j.kind, pb);
+    } else if (j.kind === 'pulley') {
+      const G = pulleyGeom(scene, j), T = j._f || 0, ja = j._ja || [0, 0], jb = j._jb || [0, 0];
+      end(j.a, [-T * G.g1[0] + ja[0], -T * G.g1[1] + ja[1]], 0, 'pulley', G.pA);
+      end(j.b, [-T * G.g2[0] + jb[0], -T * G.g2[1] + jb[1]], 0, 'pulley', G.pB);
+      end(j.p, [T * (G.g1[0] + G.g2[0]) - ja[0] - jb[0], T * (G.g1[1] + G.g2[1]) - ja[1] - jb[1]], 0, 'pulley', G.c);
+    } else if (j.kind === 'load') {
+      end(j.a, loadVector(scene, j), 0, 'load');
+    } else if (j.kind === 'couple') {
+      end(j.a, [0, 0], j.M, 'couple');
+    }
+    return out;
+  }
+
   // The mouse "hand" while running: a spring from the grabbed point to the pointer, plus
   // damping so it doesn't wobble. k and c are set when you grab (scaled to what you hold).
   function handForce(scene, d) {
@@ -597,15 +670,16 @@
     if (!b || b.fixed) return;
     const p = toWorld(b, d.x, d.y), fx = d.k * (d.tx - p[0]), fy = d.k * (d.ty - p[1]);
     b._fx += fx; b._fy += fy; b._t += (p[0] - b.x) * fy - (p[1] - b.y) * fx;
-    d._F = Math.hypot(fx, fy);
+    d._F = Math.hypot(fx, fy); d._fx = fx; d._fy = fy;
   }
 
   function handDamping(scene, d, h) {
     const b = scene._byId.get(d.body);
     if (!b || b.fixed) return;
     const r = arm(b, toWorld(b, d.x, d.y));
-    dampAlong(null, [0, 0], b, r, [1, 0], d.c, h);
-    dampAlong(null, [0, 0], b, r, [0, 1], d.c, h);
+    // the damping is part of the hand's force on the body too (dampAlong returns + = resisting)
+    d._fx = (d._fx || 0) - dampAlong(null, [0, 0], b, r, [1, 0], d.c, h);
+    d._fy = (d._fy || 0) - dampAlong(null, [0, 0], b, r, [0, 1], d.c, h);
   }
 
   // Total mass of everything joined to a body (not counting the ground), so the hand can be
@@ -627,6 +701,29 @@
 
   // ---------- stepping ----------
 
+  // Add this substep's joint forces into the frame averages (see step).
+  function accumulate(scene, ends, hand, hacc) {
+    for (const j of scene.joints) {
+      const ac = j._acc; // written out: a keyed loop here costs as much as the joints
+      ac[0] += j._f || 0; ac[1] += j._fx || 0; ac[2] += j._fy || 0; ac[3] += j._m || 0; ac[4] += j._torque || 0;
+      if (!ends) continue;
+      const ef = endForces(scene, j);
+      if (!j._ae) j._ae = ef.map((e) => ({ body: e.body, kind: e.kind, f: [0, 0], mz: 0, mc: 0, p: e.p }));
+      ef.forEach((e, i) => {
+        const a = j._ae[i], b = e.body != null ? scene._byId.get(e.body) : null;
+        a.f[0] += e.f[0]; a.f[1] += e.f[1]; a.mz += e.mz; a.p = e.p;
+        if (b) a.mc += (e.p[0] - b.x) * e.f[1] - (e.p[1] - b.y) * e.f[0];
+      });
+  }
+  for (const b of scene.bodies) if (b._red) b._facc += b._f || 0;
+  if (hand) {
+    const hb = scene._byId.get(hand.body);
+    hacc[0] += hand._fx || 0; hacc[1] += hand._fy || 0;
+    if (hb) { const hp = toWorld(hb, hand.x, hand.y); hacc[2] += (hp[0] - hb.x) * (hand._fy || 0) - (hp[1] - hb.y) * (hand._fx || 0); }
+  }
+  }
+
+
   function step(scene, dt, hand) {
     index(scene);
     // settings.substeps is per 1/60 s, so a 144 Hz screen doesn't do more work than it needs to
@@ -638,6 +735,17 @@
       // load feel like tonnes at the piston), so this stays stable and keeps the speed on target.
       if (j.kind === 'piston' || (j.kind === 'pivot' && j.motor)) j._gain = (directLoad(scene, j) * 0.015) / h;
     }
+    // Forces change from substep to substep, so for read-outs each one is also averaged over the
+    // whole frame (j._avg). Those averages balance the frame's change in speed exactly, which is
+    // what lets the free-body diagrams check ΣF = m·a.
+    // Per joint end: force, couple, and its moment about that body's centre (mc), since the
+    // direction and lever arm both turn during the frame. Reading every kind of joint every
+    // substep makes the solver noticeably slower, so it's only done while something shows the
+    // results (scene._wantEnds: a free-body diagram, the statics view, a part's force card).
+    const ends = !!scene._wantEnds;
+    for (const j of scene.joints) { j._acc = [0, 0, 0, 0, 0]; j._ae = null; if (!ends) j._avgEnds = null; }
+    for (const b of scene.bodies) { b._facc = 0; b._v0 = [b.vx, b.vy, b.av]; b._p0 = [b.x, b.y, b.a]; }
+    const hacc = [0, 0, 0];
     for (let s = 0; s < n; s++) {
       // 1. forces: weight (which can be negative: it floats up), springs, motors, pistons, the hand
       for (const b of scene.bodies) { b._fx = 0; b._fy = b.mass * S.gravity * (b.gscale ?? 1); b._t = 0; }
@@ -645,6 +753,7 @@
         if (j.kind === 'spring') springForce(scene, j);
         else if (j.kind === 'piston') pistonDrive(scene, j, h);
         else if (j.kind === 'pivot' && j.motor) motorDrive(scene, j, h);
+        else if (j.kind === 'load' || j.kind === 'couple') applyLoad(scene, j);
       }
       if (hand) handForce(scene, hand);
       // 2. forces change velocities
@@ -667,19 +776,34 @@
       for (const j of scene.joints) solveJoint(scene, j, h, false);
       for (const [j, times] of scene._light) { // extra passes for light rods on heavy parts
         for (let k = 0; k < times; k++) {
-          const f = j._f || 0, fx = j._fx || 0, fy = j._fy || 0;
+          const f = j._f || 0, fx = j._fx || 0, fy = j._fy || 0, m = j._m || 0;
           solveJoint(scene, j, h, false);
           j._f += f; j._fx += fx; j._fy += fy;
+          if (j.kind === 'weld') j._m += m; // (pins never get _m: keeping each kind's fields fixed keeps the solver fast)
         }
       }
       poseIdeal(scene);
       for (const j of scene.joints) if (j.kind === 'piston') j._f = -(j._push || 0) + j._stop + (j._cush || 0); // + pull, - push
+      accumulate(scene, ends, hand, hacc);
       // 5. the velocity is whatever movement actually happened
       for (const b of scene.bodies) {
         if (b.fixed) continue;
         b.vx = (b.x - b._px) / h; b.vy = (b.y - b._py) / h; b.av = (b.a - b._pa) / h;
       }
     }
+    for (const j of scene.joints) {
+      j._avg = { f: j._acc[0] / n, fx: j._acc[1] / n, fy: j._acc[2] / n, m: j._acc[3] / n, torque: j._acc[4] / n };
+      if (ends) j._avgEnds = !j._ae ? null : j._ae.map((a) => ({ body: a.body, kind: a.kind, p: a.p, f: [a.f[0] / n, a.f[1] / n], mz: a.mz / n, mc: a.mc / n }));
+    }
+    for (const b of scene.bodies) {
+      b._favg = b._red ? b._facc / n : 0;
+      // acceleration over the frame (world axes; _aa is the angular one, + clockwise on screen)
+      b._ax = (b.vx - b._v0[0]) / dt; b._ay = (b.vy - b._v0[1]) / dt; b._aa = (b.av - b._v0[2]) / dt;
+      // velocity over the whole frame: steadier for read-outs than the last substep's
+      b._vf = [(b.x - b._p0[0]) / dt, (b.y - b._p0[1]) / dt, (b.a - b._p0[2]) / dt];
+    }
+    if (hand) { hand._avg = ends ? [hacc[0] / n, hacc[1] / n] : null; hand._avgMc = ends ? hacc[2] / n : null; }
+    scene._dt = dt;
     scene.time += dt;
   }
 
@@ -723,6 +847,6 @@
   ML.Phys = {
     polyArea, polyCentroid, shapeArea, innerSize, updateMass, index,
     toWorld, toLocal, rotate, bodyOf, angleOf, endWorld, hitBody, jointLength, pulleyGeom, barAxial, poseIdeal,
-    step, pose, energy, clusterMass,
+    step, pose, energy, clusterMass, loadVector, endForces,
   };
 })();

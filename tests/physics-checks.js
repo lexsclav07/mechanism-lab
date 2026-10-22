@@ -1,8 +1,8 @@
 // Physics checks: run the solver headless and compare against textbook answers.
 // Run with:  node tests/physics-checks.js   (no dependencies; exits 1 if anything fails)
 global.window = {};
-for (const f of ['physics', 'model', 'presets']) require(`../js/${f}.js`);
-const { Phys: P, Model: M, Presets } = window.ML;
+for (const f of ['physics', 'model', 'presets', 'forces']) require(`../js/${f}.js`);
+const { Phys: P, Model: M, Presets, Forces: Fo } = window.ML;
 
 let failed = 0;
 function check(name, got, want, tol) {
@@ -16,7 +16,7 @@ const scene = (bodies, joints, extra = {}) => ({ time: 0, settings: Object.assig
 const disc = (id, x, y, m, more = {}) => Object.assign({ id, kind: 'disc', r: 0.05, mass: m, x, y, a: 0, vx: 0, vy: 0, av: 0 }, more);
 const ground = (x, y) => ({ body: null, x, y });
 const at = (id) => ({ body: id, x: 0, y: 0 });
-const run = (s, seconds, hand) => { for (let i = 0; i < Math.round(seconds * 60); i++) P.step(s, 1 / 60, hand); };
+const run = (s, seconds, hand) => { s._wantEnds = true; for (let i = 0; i < Math.round(seconds * 60); i++) P.step(s, 1 / 60, hand); };
 
 // Simple pendulum, small swing: T = 2π√(L/g)
 {
@@ -192,6 +192,92 @@ for (const pr of Presets) {
   }
   const finite = s.bodies.every((b) => Number.isFinite(b.x + b.y + b.a));
   check(`preset "${pr.name}" joint error after 10 s (m)`, finite ? worst : Infinity, 0, 1e-4);
+}
+
+
+// ---------- statics: reactions, member forces and internal forces against textbook answers ----------
+const bar = (id, x1, y1, x2, y2, more = {}) => Object.assign({ id, kind: 'bar', x: (x1 + x2) / 2, y: (y1 + y2) / 2, a: Math.atan2(y2 - y1, x2 - x1),
+  L: Math.hypot(x2 - x1, y2 - y1), mass: 0.2 * Math.hypot(x2 - x1, y2 - y1), ideal: false, vx: 0, vy: 0, av: 0, gscale: 1 }, more);
+const pinG = (body, x, y, bx) => ({ kind: 'pivot', a: { body, x: bx, y: 0 }, b: ground(x, y), motor: 0 });
+const load = (body, x, F, angle = -90) => ({ kind: 'load', a: { body, x, y: 0 }, b: { body, x, y: 0 }, F, angle, follow: false });
+const reactions = (s, b) => Fo.onBody(s, b).filter((it) => it.kind === 'reaction' && it.ground);
+
+// Simply supported beam, 4 m, pin at A and roller at B, 1000 N down 1 m from A:
+// R_A = 750 N, R_B = 250 N, biggest bending moment 750 N·m under the load.
+{
+  const s = scene([bar(1, 0, 0, 4, 0)], [pinG(1, 0, 0, -2), { kind: 'slider', a: ground(4, 0), b: { body: 1, x: 2, y: 0 }, dir: [1, 0], lock: false, angle0: 0, limits: false, lo: -1, hi: 1 }, load(1, -1, 1000)], { gravity: 0 });
+  run(s, 1);
+  const R = reactions(s, s.bodies[0]).map((r) => Fo.tb(r.f));
+  check('beam: reaction at A (N, up)', R[0][1], 750, 2);
+  check('beam: reaction at B (N, up)', R[1][1], 250, 2);
+  const sec = Fo.section(s, s.bodies[0], Fo.onBody(s, s.bodies[0]));
+  check('beam: biggest bending moment (N·m)', Math.max(...sec.rows.map((r) => r.M)), 750, 3);
+  check('beam: shear just right of A (N)', sec.at(-1.9).V, 750, 2);
+  check('beam: shear right of the load (N)', sec.at(0).V, -250, 2);
+}
+
+// Simply supported beam under its own weight: M_max = wL²/8 = m g L / 8 at mid-span.
+{
+  const s = scene([bar(1, 0, 0, 4, 0, { mass: 10 })], [pinG(1, 0, 0, -2), { kind: 'slider', a: ground(4, 0), b: { body: 1, x: 2, y: 0 }, dir: [1, 0], lock: false, angle0: 0, limits: false, lo: -1, hi: 1 }]);
+  run(s, 1);
+  const sec = Fo.section(s, s.bodies[0], Fo.onBody(s, s.bodies[0]));
+  check('beam under its own weight: M at mid-span (N·m)', sec.at(0).M, +(10 * g * 4 / 8).toFixed(3), 0.3);
+}
+
+// Cantilever, 2 m, glued to a wall, 500 N down at the tip: the wall gives 500 N up and a
+// 1000 N·m anticlockwise moment; the beam's root carries M = -1000 N·m (hogging).
+{
+  const s = scene([bar(1, 0, 0, 2, 0)], [{ kind: 'weld', a: { body: 1, x: -1, y: 0 }, b: ground(0, 0), angle0: 0 }, load(1, 1, 500)], { gravity: 0 });
+  run(s, 1);
+  const [R] = reactions(s, s.bodies[0]);
+  check('cantilever: wall force (N, up)', Fo.tb(R.f)[1], 500, 1);
+  check('cantilever: wall moment (N·m, anticlockwise)', R.mz, 1000, 2);
+  const sec = Fo.section(s, s.bodies[0], Fo.onBody(s, s.bodies[0]));
+  check('cantilever: moment at the root (N·m)', sec.at(-0.999).M, -1000, 3);
+}
+
+// Equilateral truss, 2 m sides, pinned at A, roller at B, 1000 N down at the top joint C.
+// Method of joints: the sloping members carry 1000 / (2 sin 60°) = 577.4 N compression and
+// the bottom chord 1000 / (2 tan 60°) = 288.7 N tension.
+{
+  const h = Math.sqrt(3), A = [0, 0], B = [2, 0], C = [1, -h];
+  const AB = bar(1, ...A, ...B), AC = bar(2, ...A, ...C), BC = bar(3, ...B, ...C);
+  const pin = (b1, x1, b2, x2) => ({ kind: 'pivot', a: { body: b1, x: x1, y: 0 }, b: { body: b2, x: x2, y: 0 }, motor: 0 });
+  const s = scene([AB, AC, BC], [
+    pinG(1, 0, 0, -1), pin(1, -1, 2, -1), pin(1, 1, 3, -1), pin(2, 1, 3, 1),
+    { kind: 'slider', a: ground(2, 0), b: { body: 1, x: 1, y: 0 }, dir: [1, 0], lock: false, angle0: 0, limits: false, lo: -1, hi: 1 },
+    load(2, 1, 1000)], { gravity: 0 });
+  run(s, 1);
+  const N = (b) => Fo.section(s, b, Fo.onBody(s, b)).at(0).N;
+  check('truss: bottom chord AB (N, + tension)', N(s.bodies[0]), 288.7, 2);
+  check('truss: member AC (N, - compression)', N(s.bodies[1]), -577.4, 3);
+  check('truss: member BC (N, - compression)', N(s.bodies[2]), -577.4, 3);
+}
+
+// Paused, the read-outs come from one frame run on a copy: a freshly built beam (never run)
+// must already show its static reactions.
+{
+  const pr = Presets.find((p) => p.id === 'beam');
+  const z = Fo.snapshot(pr.build()), b = z.bodies.find((x) => x.kind === 'bar');
+  const R = Fo.onBody(z, b).filter((it) => it.kind === 'reaction').map((r) => Fo.tb(r.f)[1]);
+  check('paused beam example: reaction at A (N)', R[0], 700, 2);
+  check('paused beam example: reaction at B (N)', R[1], 300, 2);
+}
+
+// Every part of every example obeys ΣF = m·a and ΣM_G = I·α, using the frame-averaged forces.
+for (const pr of Presets) {
+  const s = pr.build();
+  run(s, 3);
+  let worstF = 0, worstM = 0;
+  for (const b of s.bodies) {
+    if (b.fixed || b._red) continue;
+    const bal = Fo.balance(s, b, Fo.onBody(s, b));
+    const scaleF = Math.max(1, b.mass * g, ...Fo.onBody(s, b).map((it) => Math.hypot(...it.f)));
+    worstF = Math.max(worstF, Math.hypot(bal.F[0] - bal.ma[0], bal.F[1] - bal.ma[1]) / scaleF);
+    worstM = Math.max(worstM, Math.abs(bal.M - bal.Ia) / Math.max(1, scaleF * 0.5));
+  }
+  check(`preset "${pr.name}": ΣF = m·a, worst error (share of the biggest force)`, worstF, 0, 0.01);
+  check(`preset "${pr.name}": ΣM = I·α, worst error`, worstM, 0, 0.01);
 }
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');

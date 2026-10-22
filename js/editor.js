@@ -27,9 +27,13 @@
     spring: 'Drag from one point to another. The spring starts at its relaxed length. An end in empty space hooks to a wall.',
     damper: 'Drag from one point to another for a damper. It resists motion along its length (it doesn’t spring back).',
     piston: 'Drag from one point to another for a piston. It pushes in and out on its own. Set speed, force and stroke in its card.',
-    slider: 'Press on a block, then drag the way it should slide.',
+    slider: 'Press on a block, then drag the way it should slide. On a rod it’s a roller support (free to tilt).',
+    load: 'Press on a part where the force acts and drag the way it pushes; the longer the drag, the bigger the force. Tap for 100 N straight down.',
+    couple: 'Tap a part to put a turning moment (a couple) on it: 20 N·m anticlockwise. Set its size and direction in its card.',
     erase: 'Tap anything to remove it.',
   };
+  // Supports for statics problems, for the Pin and Glue hints: Pin on one part = pinned
+  // support, Glue on one part = fixed support, Track on a rod = roller.
 
   const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
   const roundMass = (m) => Math.max(0.1, Math.round(m * 10) / 10);
@@ -57,15 +61,27 @@
     const scene = A.S.scene, s = [sx, sy], out = [];
     P.index(scene);
     const nearest = (list, d) => list.map((x) => [x, d(x)]).filter(([, v]) => v != null).sort((p, q) => p[1] - q[1]).map(([x]) => x);
-    out.push(...nearest(scene.joints.filter((j) => j.kind === 'pivot' || j.kind === 'weld'), (j) => { const d = dist(s, R.ws(P.endWorld(scene, j.a))); return d < 9 ? d : null; }).slice(0, 1));
+    // a pin hidden in the middle of a black weight comes after the parts (tap again to reach it)
+    const hidden = (j) => [j.a, j.b].some((e) => { const b = P.bodyOf(scene, e); return b && b.kind === 'disc' && b.color === 'ink' && Math.hypot(e.x, e.y) < b.r * 0.5; });
+    const pinHit = nearest(scene.joints.filter((j) => j.kind === 'pivot' || j.kind === 'weld'), (j) => { const d = dist(s, R.ws(P.endWorld(scene, j.a))); return d < 9 ? d : null; }).slice(0, 1);
+    out.push(...pinHit.filter((j) => !hidden(j)));
     out.push(...scene.joints.filter((j) => j.kind === 'pulley' && dist(s, R.ws(P.endWorld(scene, j.p))) < j.r * V.ppm() + 6));
+    out.push(...nearest(scene.joints.filter((j) => j.kind === 'load' || j.kind === 'couple'), (j) => {
+      const q = R.ws(P.endWorld(scene, j.a));
+      if (j.kind === 'couple') { const d = Math.abs(dist(s, q) - 16); return d < 7 ? d : null; }
+      const [fx, fy] = P.loadVector(scene, j), F = Math.hypot(fx, fy) || 1, t = [q[0] - (fx / F) * 46, q[1] - (fy / F) * 46];
+      const d = segDist(s, q, t); return d < 7 ? d : null;
+    }).slice(0, 1));
     out.push(...nearest(scene.joints, (j) => {
       const segs = TWO_POINT.has(j.kind) ? [[j.a, j.b]] : j.kind === 'pulley' ? [[j.a, j.p], [j.p, j.b]] : [];
       const d = Math.min(Infinity, ...segs.map(([e1, e2]) => segDist(s, R.ws(P.endWorld(scene, e1)), R.ws(P.endWorld(scene, e2)))));
       return d < 7 ? d : null;
     }).slice(0, 1));
     const parts = bodiesAt(V.s2w(sx, sy));
-    out.push(...parts.filter((b) => b.kind === 'bar'), ...parts.filter((b) => b.kind !== 'bar'));
+    // rods before other parts (they're thin and lie on top), except a weight you tap inside of
+    const w = V.s2w(sx, sy), inWeight = parts.filter((b) => b.kind === 'disc' && Math.hypot(w[0] - b.x, w[1] - b.y) < b.r);
+    out.push(...inWeight, ...parts.filter((b) => b.kind === 'bar'), ...parts.filter((b) => b.kind !== 'bar'));
+    out.push(...pinHit.filter(hidden));
     out.push(...scene.joints.filter((j) => { if (j.kind !== 'slider') return false; const [e0, e1] = railEnds(scene, j); return segDist(s, R.ws(e0), R.ws(e1)) < 6; }));
     return out.filter((x, i) => out.indexOf(x) === i);
   }
@@ -156,7 +172,7 @@
 
   const tools = {
     select: {
-      down(sx, sy) {
+      down(sx, sy, e) {
         const S = A.S, scene = S.scene, w = V.s2w(sx, sy);
         // 1. handles on the selected joint (re-attach its ends)
         if (S.selected && !M.isBody(S.selected)) {
@@ -172,11 +188,26 @@
         }
         // 2. ground anchors: drag them about, even while it's running
         const anchors = anchorsAt(sx, sy);
-        if (anchors) { op = { type: 'anchor', ends: anchors, moved: false }; canvas.style.cursor = 'grabbing'; return; }
+        if (anchors) {
+          // ...and open the support's card (its reactions are on the Forces tab), if it's a pin or glue
+          const sup = scene.joints.find((j) => (j.kind === 'pivot' || j.kind === 'weld') && [j.a, j.b].some((e) => anchors.includes(e)));
+          if (sup) A.select(sup);
+          op = { type: 'anchor', ends: anchors, moved: false }; canvas.style.cursor = 'grabbing'; return;
+        }
         // 3. a body: grab the exact point you pressed (a massless rod hands it to what it joins;
         //    a pin grabs the mechanism there)
         const item = pick(sx, sy, true);
+        // a second part for comparing: shift-click, or after "Compare with another part"
+        const first = S.selected && M.isBody(S.selected) ? S.selected : S.pairFrom;
+        if (item && M.isBody(item) && first && item !== first && ((e && e.shiftKey) || S.pairFrom === first)) {
+          S.pairFrom = null; A.select({ kind: 'pair', id: 'pair', a: first, b: item });
+          A.hint('Comparing two parts: their angles and the forces between them are on the card.');
+          op = { type: 'pan', last: [sx, sy] };
+          return;
+        }
+        S.pairFrom = null;
         A.select(item);
+        if (item && M.isBody(item)) { const [x, y] = P.toLocal(item, w[0], w[1]); S.probe = { body: item.id, x, y }; } else S.probe = null;
         let hold = null;
         if (item && M.isBody(item)) {
           if (item._red) hold = Rd.grabTarget(item, w);
@@ -375,7 +406,45 @@
         const j = M.addJoint(scene, {
           kind: 'slider', a: endOn(host, op.p0), b: endOn(car, op.p0),
           dir: host ? P.rotate(-host.a, u[0], u[1]) : u, angle0: car.a - (host ? host.a : 0), lo: -L, hi: L,
+          lock: car.kind !== 'bar', // a rod on a track tilts freely: a roller support
         });
+        A.select(j); A.changed();
+      },
+    },
+
+    // A point load: press where it acts, drag the way it pushes (length = size), or tap for
+    // 100 N straight down. It's drawn pointing at the point, like the loads in a statics figure.
+    load: {
+      down(sx, sy) {
+        const p = snap(sx, sy).p, host = bodiesAt(p)[0];
+        if (!host) { A.hint('A load goes on a part: press on a rod, block, weight or shape.'); return; }
+        op = { host, p: host.kind === 'bar' ? Rd.onPart(host, p) : p, s0: [sx, sy], s1: [sx, sy] };
+      },
+      move(sx, sy) {
+        if (!op) return;
+        op.s1 = [sx, sy];
+        const { F, angle } = loadFromDrag(op), q = R.ws(op.p), th = (angle * Math.PI) / 180;
+        setPreview((ctx) => { ctx.save(); ctx.globalAlpha = 0.85; R.arrowTo(ctx, q, [Math.cos(th), -Math.sin(th)], 46, R.colors().accent, 2.4); ctx.restore();
+          previewText(ctx, `${F} N at ${angle}°`, [sx, sy]); });
+      },
+      up() {
+        if (!op) return;
+        const scene = A.S.scene, { F, angle } = loadFromDrag(op);
+        A.checkpoint();
+        const e = endOn(op.host, op.p);
+        const j = M.addJoint(scene, { kind: 'load', a: e, b: { ...e }, F, angle, label: M.autoLabel(scene, 'load') });
+        A.select(j); A.changed();
+        A.hint(`${F} N load on ${op.host.label || 'the ' + M.kindName(op.host).toLowerCase()}. Tap a support or a part to see what it does.`);
+      },
+    },
+    couple: {
+      tap: true, down() {}, move() {},
+      up(sx, sy) {
+        const scene = A.S.scene, p = snap(sx, sy).p, host = bodiesAt(p)[0];
+        if (!host) { A.hint('A moment goes on a part: tap a rod, block, weight or shape.'); return; }
+        A.checkpoint();
+        const e = endOn(host, host.kind === 'bar' ? Rd.onPart(host, p) : p);
+        const j = M.addJoint(scene, { kind: 'couple', a: e, b: { ...e }, M: 20, label: M.autoLabel(scene, 'couple') });
         A.select(j); A.changed();
       },
     },
@@ -394,6 +463,16 @@
       },
     },
   };
+
+  // Drag length and direction → a tidy force: about 4 N per pixel, rounded to 2 significant
+  // figures, at a whole-degree angle (textbook angles: anticlockwise from +x). A tap is 100 N down.
+  function loadFromDrag(o) {
+    const dx = o.s1[0] - o.s0[0], dy = o.s1[1] - o.s0[1], L = Math.hypot(dx, dy);
+    if (L < 8) return { F: 100, angle: -90 };
+    let angle = Math.round((Math.atan2(-dy, dx) * 180) / Math.PI);
+    for (const a of [-180, -135, -90, -45, 0, 45, 90, 135, 180]) if (Math.abs(angle - a) <= 4) angle = a === -180 ? 180 : a; // snap to the common ones
+    return { F: +(L * 4).toPrecision(2), angle };
+  }
 
   // Ropes, springs, dampers and pistons are all drawn by dragging from point to point.
   function lineTool(kind) {

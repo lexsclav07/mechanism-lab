@@ -22,6 +22,9 @@
     damper: { c: 20 },
     piston: { min: 0.5, max: 1.5, speed: 0.4, force: 400, mode: 'cycle', phase: 1 },
     slider: { dir: [1, 0], lock: true, angle0: 0, limits: true, lo: -1, hi: 1 },
+    // loads, as in statics problems: angle in degrees anticlockwise from +x (-90 = down), M + anticlockwise
+    load: { F: 100, angle: -90, follow: false },
+    couple: { M: 20 },
   };
 
   function newScene() {
@@ -149,12 +152,12 @@
   }
 
   const KIND_NAMES = { box: 'Block', disc: 'Weight', poly: 'Shape', bar: 'Rod', pivot: 'Pin', weld: 'Glue', rod: 'Rod', rope: 'Rope',
-    pulley: 'Pulley', spring: 'Spring', damper: 'Damper', piston: 'Piston', slider: 'Track' };
+    pulley: 'Pulley', spring: 'Spring', damper: 'Damper', piston: 'Piston', slider: 'Track', load: 'Load', couple: 'Moment' };
   const kindName = (item) => (item.kind === 'pivot' && item.motor ? 'Motor' : KIND_NAMES[item.kind] || item.kind);
 
   // Textbook-style labels for new parts, like the figure: M for bodies, m for weights,
-  // k for springs, c for dampers, L for rods. Ropes, pulleys and pistons go unlabelled.
-  const LETTERS = { box: 'M', poly: 'M', disc: 'm', bar: 'L', spring: 'k', damper: 'c' };
+  // k for springs, c for dampers, L for rods, P for loads, C for couples. Ropes, pulleys and pistons go unlabelled.
+  const LETTERS = { box: 'M', poly: 'M', disc: 'm', bar: 'L', spring: 'k', damper: 'c', load: 'P', couple: 'C' };
   const autoLabel = (scene, kind) => (LETTERS[kind] ? nextLabel(scene, LETTERS[kind]) : '');
 
   ML.Model = { newScene, addBody, addJoint, serialize, load, findById, isBody, remove, unpin, nextLabel, autoLabel, kindName, barMass };

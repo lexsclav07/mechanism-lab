@@ -6,6 +6,7 @@
   const P = ML.Phys, M = ML.Model, R = ML.Render;
   let A, card;
   let live = []; // [element, () => text] pairs refreshed a few times a second
+  let panels = []; // [element, build(element)] blocks rebuilt a few times a second (force tables, charts)
 
   // tiny DOM helper: h('div', {class: 'x'}, child, 'text', ...)
   function h(tag, attrs = {}, ...kids) {
@@ -85,7 +86,234 @@
   const liveBox = (...rows) => h('div', { class: 'live' }, h('h3', {}, 'Live'), ...rows);
   const note = (text) => h('p', { class: 'note' }, text);
   const running = () => A.S.running;
+  const fa = (j) => (j._avg ? j._avg.f : fa(j)); // averaged over the last frame
+  const ta = (j) => (j._avg ? j._avg.torque : j._torque || 0);
   const pushPull = (F) => (Math.abs(F) < 0.005 ? '0 N' : `${fmt(Math.abs(F), 1)} N ${F > 0 ? 'pull' : 'push'}`);
+
+  // ---------- engineering mechanics read-outs ----------
+  // Signs follow the textbook: x to the right, y up, angles and moments anticlockwise +.
+
+  const Fo = () => ML.Forces;
+  const panel = (build) => { const el = h('div', { class: 'mech' }); panels.push([el, build]); build(el); return el; };
+  const sym = (t) => { const i = t.indexOf('_'); return h('i', { class: 'm' }, i < 0 ? t : [t.slice(0, i), h('sub', {}, t.slice(i + 1))]); };
+  const num = (v, d = 1) => (Math.abs(v) < 0.005 ? '0' : fmt(v, d));
+  const degs = (v) => `${num(v, 1)}°`;
+  const nameOf = (b) => (b ? b.label || M.kindName(b).toLowerCase() : 'ground');
+  const named = (b) => (b && b.label ? sym(b.label) : nameOf(b));
+  // the analysed copy of a part or joint (paused, the read-outs come from a copy: see app.js)
+  const inAn = (an, item) => (an ? (M.isBody(item) ? an._byId.get(item.id) : an.joints.find((j) => j.id === item.id)) : null);
+  const nowWord = () => (A.S.running ? 'now' : 'at this instant (paused)');
+
+  function table(head, rows, foot) {
+    return h('table', { class: 'ftab' },
+      h('thead', {}, h('tr', {}, ...head.map((x, i) => h('th', { scope: 'col', class: i ? 'n' : '' }, x)))),
+      h('tbody', {}, ...rows.map((r) => h('tr', { class: r.cls || '' }, ...r.cells.map((c, i) => h(i ? 'td' : 'th', { class: i ? 'n' : '', scope: i ? null : 'row' }, c))))),
+      foot ? h('tfoot', {}, ...foot.map((r) => h('tr', { class: r.cls || '' }, ...r.cells.map((c, i) => h(i ? 'td' : 'th', { class: i ? 'n' : '', scope: i ? null : 'row' }, c))))) : null);
+  }
+
+  // Forces on a part: its free-body diagram as a table, the sums, and Newton's second law.
+  function forcesPanel(b) {
+    const S = A.S;
+    return panel((el) => {
+      const an = A.analysis(), bz = inAn(an, b);
+      if (!bz) { el.replaceChildren(note('Working out the forces…')); return; }
+      const items = Fo().onBody(an, bz, an === S.scene ? S.drag : null);
+      const pts = items.filter((it) => it.kind === 'reaction');
+      const about = pts.find((it) => it.letter === S.momentAbout) || null;
+      const q = about ? about.p : [bz.x, bz.y];
+      const bal = Fo().balance(an, bz, items, q);
+      const mAbout = (it) => (it.mG ?? 0) + Fo().momentAbout([bz.x, bz.y], it.f, q);
+      const rows = items.map((it) => {
+        const f = Fo().tb(it.f), couple = it.kind === 'couple';
+        return { cells: [h('span', { class: 'fname' }, sym(it.sym), h('small', {}, it.name)), couple ? '' : num(f[0]), couple ? '' : num(f[1]), num(mAbout(it))] };
+      });
+      const big = Math.max(1, ...items.map((it) => Math.hypot(...it.f)));
+      const still = Math.hypot(...bal.ma) < big * 0.005 && Math.abs(bal.Ia) < big * 0.005;
+      const foot = [{ cls: 'sum', cells: [h('span', {}, 'Σ (total)'), num(bal.F[0]), num(bal.F[1]), num(bal.M)] }];
+      if (!bz.fixed && !bz._red) foot.push({ cells: [h('span', {}, 'm·a, I·α'), num(bal.ma[0]), num(bal.ma[1]), num(bal.Ia)] });
+      const status = bz.fixed ? `Fixed in place: the ground holds it with ${num(-bal.F[0])} N across, ${num(-bal.F[1])} N up and ${num(-bal.M)} N·m.`
+        : bz._red ? 'A massless rod: the forces at its two ends are equal and opposite, along the rod (a two-force member).'
+          : still ? 'In equilibrium: ΣFx = 0, ΣFy = 0 and ΣM = 0, so it isn’t accelerating.'
+            : `Not in equilibrium: the totals equal m·a and I·α (Newton’s second law). a = ${num(Math.hypot(...bal.a), 2)} m/s², α = ${num(bal.alpha, 2)} rad/s².`;
+      const pick = h('select', { 'aria-label': 'Take moments about', onchange: (e) => { S.momentAbout = e.target.value; } },
+        h('option', { value: 'G' }, 'its centre of mass G'), ...pts.map((it) => h('option', { value: it.letter, selected: it === about }, `pin ${it.letter}`)));
+      const keep = el.querySelector('select');
+      el.replaceChildren(
+        h('p', { class: 'note' }, `Forces on it ${nowWord()}, in N (x →, y ↑). Moments in N·m, anticlockwise +.`),
+        table(['Force', 'Fx', 'Fy', 'M'], rows, foot),
+        h('div', { class: 'about' }, h('span', {}, 'Moments about'), keep && document.activeElement === keep ? keep : pick),
+        note(status));
+    });
+  }
+
+  // N, V and M along a rod or beam, as three small charts (x from its left end).
+  // floor: the smallest range worth drawing, so rounding noise around 0 stays a flat line
+  function chart(rows, key, label, unit, floor = 1e-6) {
+    const W = 268, H = 64, pad = 4, xs = rows.map((r) => r.x), ys = rows.map((r) => (Math.abs(r[key]) < floor * 0.01 ? 0 : r[key]));
+    const L = xs[xs.length - 1] || 1;
+    let lo = Math.min(0, ...ys), hi = Math.max(0, ...ys);
+    if (hi - lo < floor) { const mid = (hi + lo) / 2; lo = Math.min(lo, mid - floor / 2); hi = Math.max(hi, mid + floor / 2); }
+    const span = hi - lo;
+    const X = (x) => pad + ((W - 2 * pad) * x) / L, Y = (y) => pad + ((H - 2 * pad) * (hi - y)) / span;
+    const d = rows.map((r, i) => `${i ? 'L' : 'M'}${X(r.x).toFixed(1)},${Y(r[key]).toFixed(1)}`).join('');
+    const area = `${d}L${X(L).toFixed(1)},${Y(0).toFixed(1)}L${X(0).toFixed(1)},${Y(0).toFixed(1)}Z`;
+    let iMax = 0; ys.forEach((v, i) => { if (Math.abs(v) > Math.abs(ys[iMax])) iMax = i; });
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class', 'dgm'); svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', `${label} along the member: largest ${fmt(ys[iMax], 1)} ${unit} at ${fmt(xs[iMax], 2)} m`);
+    svg.innerHTML = `<path d="${area}" class="dgm-area"/><line x1="${pad}" x2="${W - pad}" y1="${Y(0)}" y2="${Y(0)}" class="dgm-zero"/>`
+      + `<path d="${d}" class="dgm-line"/><circle cx="${X(xs[iMax])}" cy="${Y(ys[iMax])}" r="3" class="dgm-dot"/>`
+      + `<line class="dgm-x" y1="${pad}" y2="${H - pad}" x1="-9" x2="-9"/>`;
+    const maxText = () => (Math.abs(ys[iMax]) < floor * 0.01 ? `0 ${unit} all along` : `max ${fmt(ys[iMax], 1)} ${unit} at x = ${fmt(xs[iMax], 2)} m`);
+    const tip = h('span', { class: 'dgm-tip' }, maxText());
+    const box = h('figure', { class: 'dgm-box' }, h('figcaption', {}, h('b', {}, label), tip), svg);
+    // hover: a crosshair and the value under the pointer
+    svg.addEventListener('pointermove', (e) => {
+      const r = svg.getBoundingClientRect(), x = (((e.clientX - r.left) / r.width) * W - pad) / (W - 2 * pad) * L;
+      let k = 0; for (let i = 0; i < xs.length; i++) if (Math.abs(xs[i] - x) < Math.abs(xs[k] - x)) k = i;
+      const line = svg.querySelector('.dgm-x'); line.setAttribute('x1', X(xs[k])); line.setAttribute('x2', X(xs[k]));
+      tip.textContent = `${fmt(ys[k], 1)} ${unit} at x = ${fmt(xs[k], 2)} m`;
+      box.dataset.hover = '1';
+    });
+    svg.addEventListener('pointerleave', () => { delete box.dataset.hover; tip.textContent = maxText(); svg.querySelector('.dgm-x').setAttribute('x1', -9); svg.querySelector('.dgm-x').setAttribute('x2', -9); });
+    return box;
+  }
+
+  function insidePanel(b) {
+    return panel((el) => {
+      if (el.querySelector('[data-hover]')) return; // don't rebuild under the pointer
+      const an = A.analysis(), bz = inAn(an, b);
+      if (!bz) { el.replaceChildren(); return; }
+      const sec = Fo().section(an, bz, Fo().onBody(an, bz, an === A.S.scene ? A.S.drag : null));
+      if (!sec) { el.replaceChildren(); return; }
+      el.replaceChildren(
+        h('p', { class: 'note' }, `Inside it, cut at distance x from its left end: N = axial force (+ tension), V = shear, M = bending moment (+ sagging). ${fmt(sec.L, 2)} m long.`),
+        ...(() => { // one noise floor for all three: a thousandth of the biggest value in any of them
+          const big = Math.max(...sec.rows.map((r) => Math.max(Math.abs(r.N), Math.abs(r.V), Math.abs(r.M)))), fl = Math.max(1e-3, big * 1e-3);
+          return [chart(sec.rows, 'N', 'N, axial', 'N', fl), chart(sec.rows, 'V', 'V, shear', 'N', fl), chart(sec.rows, 'M', 'M, bending', 'N·m', fl)];
+        })());
+    });
+  }
+
+  // The point you tapped on a part: where it is, how it's moving, and (in a beam) the internal
+  // forces at that cross-section.
+  function probePanel(b) {
+    return panel((el) => {
+      const pr = A.S.probe;
+      if (!pr || pr.body !== b.id) { el.replaceChildren(); return; }
+      const an = A.analysis(), bz = inAn(an, b) || b, p = P.toWorld(b, pr.x, pr.y);
+      const vb = Fo().vel(b), r = [p[0] - b.x, p[1] - b.y], v = Fo().tb([vb[0] - vb[2] * r[1], vb[1] + vb[2] * r[0]]);
+      const rows = [
+        ['Position', `(${num(p[0], 2)}, ${num(-p[1], 2)}) m`],
+        ['Velocity', Math.hypot(...v) < 0.005 ? '0 m/s (still)' : `${num(Math.hypot(...v), 2)} m/s at ${degs(Fo().angleOfVec([v[0], -v[1]]))}`],
+      ];
+      if (Fo().isBeam(b) && an) {
+        const sec = Fo().section(an, bz, Fo().onBody(an, bz, an === A.S.scene ? A.S.drag : null), 4);
+        const s0 = sec.toS(p), x = s0 - sec.s0, at = sec.at(Math.max(sec.s0 + 1e-6, Math.min(-sec.s0 - 1e-6, s0)));
+        rows.push(['Cut at x', `${num(x, 2)} m`], ['N (axial)', `${num(at.N)} N`], ['V (shear)', `${num(at.V)} N`], ['M (bending)', `${num(at.M)} N·m`]);
+      }
+      el.replaceChildren(h('div', { class: 'live' }, h('h3', {}, 'The point you tapped'), ...rows.map(([k, val]) => h('div', { class: 'stat' }, h('span', {}, k), h('output', {}, val)))));
+    });
+  }
+
+  function studyBox(b) {
+    const S = A.S;
+    const kids = [
+      h('div', { class: 'stat' }, h('span', {}, 'Angle θ (from horizontal)'), (() => { const o = h('output', {}, ''); live.push([o, () => degs(Fo().bodyAngle(b))]); o.textContent = degs(Fo().bodyAngle(b)); return o; })()),
+      toggleOpt('fbd', 'Free-body diagram on the drawing'),
+      S.opts.fbd ? toggleOpt('comp', 'Split forces into x and y parts') : null,
+      forcesPanel(b),
+      probePanel(b),
+    ];
+    if (Fo().isBeam(b)) kids.push(insidePanel(b));
+    kids.push(h('button', { type: 'button', class: 'btn', onclick: () => { S.pairFrom = b; A.hint('Now tap another part to compare the two (or shift-click it next time).', 6000); } }, 'Compare with another part…'));
+    return h('div', { class: 'study' }, ...kids.filter(Boolean));
+  }
+
+  // A view option (stored with the other display options), not a setting of the part.
+  function toggleOpt(key, label) {
+    const cb = h('input', { type: 'checkbox', id: 'i-o-' + key, role: 'switch', checked: !!A.S.opts[key] });
+    cb.addEventListener('change', () => { A.S.opts[key] = cb.checked; A.saveOpts(); refresh(); });
+    return h('label', { class: 'switch', for: 'i-o-' + key }, h('span', {}, label), cb);
+  }
+
+  // What the pin does to each part at it, and the support reaction if it's on the ground.
+  function pinPanel(j) {
+    return panel((el) => {
+      const an = A.analysis(), jz = inAn(an, j);
+      if (!jz) { el.replaceChildren(note('Working out the forces…')); return; }
+      const pt = P.endWorld(an, jz.a), pin = Fo().atPin(an, pt);
+      const rows = pin.members.filter((m) => m.body != null).map((m) => {
+        const b = P.bodyOf(an, { body: m.body }), f = Fo().tb(m.f), F = Math.hypot(...f);
+        // a rod pushed away from the pin is in compression, pulled towards it in tension
+        let sub = M.kindName(b);
+        if (b.kind === 'bar' && m.dir != null) {
+          const u = [Math.cos((m.dir * Math.PI) / 180), Math.sin((m.dir * Math.PI) / 180)], ax = -(f[0] * u[0] + f[1] * u[1]);
+          sub = `at ${num(m.dir, 0)}°` + (Math.abs(ax) > 0.05 ? `, ${ax > 0 ? 'T' : 'C'} ${num(Math.abs(ax))} N` : '');
+        }
+        return { cells: [h('span', { class: 'fname' }, b.label ? sym(b.label) : M.kindName(b).toLowerCase(), h('small', {}, sub)), num(f[0]), num(f[1]), F > 0.005 ? `${num(F)} ∠${num(Fo().angleOfVec(m.f), 0)}°` : '0'] };
+      });
+      const kids = [h('p', { class: 'note' }, `What the pin does to each part ${nowWord()}, in N (x →, y ↑, angle anticlockwise from →). T = the rod is in tension, C = compression.`), table(['Part', 'Fx', 'Fy', '|F| ∠'], rows)];
+      // loads acting right at this joint (on one of the parts here), as in the method of joints
+      const here = an.joints.filter((k) => k.kind === 'load' && Math.hypot(...P.endWorld(an, k.a).map((v, i) => v - pt[i])) < 1e-3);
+      if (here.length) kids.push(h('div', { class: 'live' }, h('h3', {}, 'Loads at this joint'), ...here.map((k) => {
+        const f = Fo().tb(P.loadVector(an, k));
+        return h('div', { class: 'stat' }, h('span', {}, sym(k.label || 'P')), h('output', {}, `${num(f[0])} N, ${num(f[1])} N`));
+      })));
+      if (pin.reaction) {
+        const f = Fo().tb(pin.reaction.f);
+        kids.push(h('div', { class: 'live' }, h('h3', {}, 'Support reaction (ground on the structure)'),
+          h('div', { class: 'stat' }, h('span', {}, sym('R_x')), h('output', {}, `${num(f[0])} N`)),
+          h('div', { class: 'stat' }, h('span', {}, sym('R_y')), h('output', {}, `${num(f[1])} N`)),
+          h('div', { class: 'stat' }, h('span', {}, '|R|'), h('output', {}, `${num(Math.hypot(...f))} N at ${degs(Fo().angleOfVec(pin.reaction.f))}`)),
+          pin.reaction.weld ? h('div', { class: 'stat' }, h('span', {}, sym('M_R')), h('output', {}, `${num(pin.reaction.mz)} N·m`)) : null));
+      }
+      const dirs = pin.members.filter((m) => m.dir != null);
+      if (dirs.length) {
+        const ang = dirs.map((m) => h('div', { class: 'stat' }, h('span', {}, ['Direction of ', named(P.bodyOf(an, { body: m.body }))]), h('output', {}, degs(m.dir))));
+        if (dirs.length === 2) ang.push(h('div', { class: 'stat' }, h('span', {}, 'Angle between them'), h('output', {}, degs(Fo().between2(dirs[0].dir, dirs[1].dir)))));
+        kids.push(h('div', { class: 'live' }, h('h3', {}, 'Angles at the pin'), ...ang));
+      }
+      el.replaceChildren(...kids);
+    });
+  }
+
+  // Two parts picked together: their angles and what one does to the other.
+  function pairCard(pair) {
+    const { a, b } = pair;
+    return [
+      h('p', { class: 'note' }, ['Comparing ', named(a), ' and ', named(b), '. Tap a part to go back to one.']),
+      panel((el) => {
+        const an = A.analysis(), az = inAn(an, a), bz = inAn(an, b);
+        if (!az || !bz) { el.replaceChildren(note('One of these parts is gone.')); return; }
+        const ta = Fo().bodyAngle(az), tbb = Fo().bodyAngle(bz), rel = Fo().deg((tbb - ta) * Math.PI / 180);
+        const kids = [h('div', { class: 'live' }, h('h3', {}, 'Angles'),
+          h('div', { class: 'stat' }, h('span', {}, ['θ of ', named(a)]), h('output', {}, degs(ta))),
+          h('div', { class: 'stat' }, h('span', {}, ['θ of ', named(b)]), h('output', {}, degs(tbb))),
+          h('div', { class: 'stat' }, h('span', {}, 'Turned relative to each other'), h('output', {}, degs(rel))),
+          h('div', { class: 'stat' }, h('span', {}, 'Angle between their lines'), h('output', {}, degs(Math.min(Fo().between2(ta, tbb), 180 - Fo().between2(ta, tbb))))),
+          h('div', { class: 'stat' }, h('span', {}, 'Distance between centres'), h('output', {}, `${num(Math.hypot(bz.x - az.x, bz.y - az.y), 3)} m`)),
+          h('div', { class: 'stat' }, h('span', {}, 'Relative spin'), h('output', {}, `${num(-(Fo().vel(bz)[2] - Fo().vel(az)[2]), 2)} rad/s`)))];
+        const bt = Fo().between(an, az, bz);
+        if (bt.via.length) {
+          const f = Fo().tb(bt.f), F = Math.hypot(...f);
+          kids.push(h('div', { class: 'live' }, h('h3', {}, ['Force ', named(a), ' puts on ', named(b)]),
+            h('div', { class: 'stat' }, h('span', {}, 'Through'), h('output', {}, bt.via.map((j) => M.kindName(j).toLowerCase()).join(', '))),
+            h('div', { class: 'stat' }, h('span', {}, sym('F_x')), h('output', {}, `${num(f[0])} N`)),
+            h('div', { class: 'stat' }, h('span', {}, sym('F_y')), h('output', {}, `${num(f[1])} N`)),
+            h('div', { class: 'stat' }, h('span', {}, '|F|'), h('output', {}, F > 0.005 ? `${num(F)} N at ${degs(Fo().angleOfVec(bt.f))}` : '0 N')),
+            Math.abs(bt.mz) > 0.005 ? h('div', { class: 'stat' }, h('span', {}, 'Moment'), h('output', {}, `${num(bt.mz)} N·m`)) : null),
+            note(['And ', named(b), ' puts the same force back on ', named(a), ', the opposite way (Newton’s third law).']));
+        } else if (bt.shared.length) {
+          for (const sh of bt.shared) {
+            const f = Fo().tb(sh.onB.f);
+            kids.push(note(['They share a pin (through another part). That pin pushes on ', named(b), ` with ${num(f[0])} N across and ${num(f[1])} N up.`]));
+          }
+        } else kids.push(note('They aren’t joined directly, so they don’t push on each other.'));
+        el.replaceChildren(...kids);
+      }),
+    ];
+  }
 
   // ---------- bodies ----------
 
@@ -176,7 +404,7 @@
         field({ id: 'i-rest', label: 'Relaxed length', unit: 'm', min: 0, max: 10, get: () => j.rest, set: (v) => (j.rest = Math.max(0, v)) }),
         h('button', { type: 'button', class: 'btn', onclick: () => { A.checkpoint(); j.rest = +len().toFixed(4); A.tweak(j); } }, 'Relax it at its current length'),
         liveBox(
-          stat('Force', () => pushPull(running() ? j._f || 0 : j.k * (len() - j.rest))),
+          stat('Force', () => pushPull(running() ? fa(j) : j.k * (len() - j.rest))),
           stat('Stretch', () => `${fmt((len() - j.rest) * 100, 1)} cm`),
           stat('Stored energy', () => `${fmt(0.5 * j.k * (len() - j.rest) ** 2)} J`)),
       ];
@@ -185,21 +413,21 @@
       return [
         note('Resists the ends moving together or apart, in proportion to how fast they move. It never springs back.'),
         field({ id: 'i-c', label: 'Damping c', unit: 'N·s/m', min: 0.1, max: 10000, log: true, get: () => j.c, set: (v) => (j.c = Math.max(0, v)), ends: ['gentle', 'stiff as treacle'] }),
-        liveBox(stat('Force', () => (running() ? pushPull(j._f || 0) : 'press Play')), stat('Length', () => `${fmt(len())} m`)),
+        liveBox(stat('Force', () => (running() ? pushPullfa(j) : 'press Play')), stat('Length', () => `${fmt(len())} m`)),
       ];
     }
     if (j.kind === 'rod') {
       return [
         note('A stiff, weightless link with a pin at each end.'),
         field({ id: 'i-len', label: 'Length', unit: 'm', min: 0.05, max: 10, get: () => j.length, set: (v) => (j.length = Math.max(0.01, v)) }),
-        liveBox(stat('Force', () => (running() ? pushPull(j._f || 0) : 'press Play'))),
+        liveBox(stat('Force', () => (running() ? pushPullfa(j) : 'press Play'))),
       ];
     }
     if (j.kind === 'rope') {
       return [
         note('Pulls only when it’s tight. Make it longer than the gap to give it slack.'),
         field({ id: 'i-len', label: 'Length', unit: 'm', min: 0.05, max: 10, get: () => j.length, set: (v) => (j.length = Math.max(0.01, v)) }),
-        liveBox(stat('Tension', () => (running() ? `${fmt(j._f || 0, 1)} N` : 'press Play')),
+        liveBox(stat('Tension', () => (running() ? `${fmt(fa(j), 1)} N` : 'press Play')),
           stat('State', () => (len() < j.length - 1e-3 ? `slack by ${fmt((j.length - len()) * 100, 1)} cm` : 'tight'))),
       ];
     }
@@ -207,7 +435,7 @@
       return [
         field({ id: 'i-len', label: 'Rope length', unit: 'm', min: 0.1, max: 20, get: () => j.length, set: (v) => (j.length = Math.max(0.05, v)), ends: ['hoist', 'lower'] }),
         field({ id: 'i-wr', label: 'Wheel radius', unit: 'm', min: 0.03, max: 1, get: () => j.r, set: (v) => (j.r = Math.max(0.01, v)) }),
-        liveBox(stat('Rope tension', () => (running() ? `${fmt(j._f || 0, 1)} N` : 'press Play'))),
+        liveBox(stat('Rope tension', () => (running() ? `${fmt(fa(j), 1)} N` : 'press Play'))),
       ];
     }
     if (j.kind === 'pivot') {
@@ -219,8 +447,8 @@
           field({ id: 'i-torque', label: 'Max torque', unit: 'N·m', min: 0.1, max: 10000, log: true, get: () => j.torque, set: (v) => (j.torque = Math.max(0, v)), ends: ['weak', 'strong'] }));
       }
       kids.push(liveBox(
-        stat('Pin force', () => (running() ? `${fmt(Math.abs(j._f || 0), 1)} N` : 'press Play')),
-        j.motor ? stat('Torque used', () => (running() ? `${fmt(Math.abs(j._torque || 0), 1)} of ${fmt(j.torque, 0)} N·m` : 'press Play')) : null,
+        stat('Pin force', () => (running() ? `${fmt(Math.abs(fa(j)), 1)} N` : 'press Play')),
+        j.motor ? stat('Torque used', () => (running() ? `${fmt(Math.abs(ta(j)), 1)} of ${fmt(j.torque, 0)} N·m` : 'press Play')) : null,
         j.motor ? stat('Actual speed', () => { const a = P.bodyOf(scene, j.a), b = P.bodyOf(scene, j.b); return `${fmt((((b ? b.av : 0) - (a ? a.av : 0)) * 60) / (2 * Math.PI), 1)} rpm`; }) : null));
       return kids;
     }
@@ -234,16 +462,36 @@
           field({ id: 'i-max', label: 'Longest', unit: 'm', min: 0.05, max: 10, get: () => j.max, set: (v) => (j.max = Math.max(v, j.min)) })),
         liveBox(
           stat('Length', () => `${fmt(len())} m`),
-          stat('Force', () => (running() ? pushPull(j._f || 0) : 'press Play')),
+          stat('Force', () => (running() ? pushPullfa(j) : 'press Play')),
           stat('Going', () => (j.phase > 0 ? 'out' : 'in'))),
       ];
     }
-    if (j.kind === 'weld') return [note('Holds two parts together as one solid piece.'), ...pinShared(j), liveBox(stat('Glue force', () => (running() ? `${fmt(Math.abs(j._f || 0), 1)} N` : 'press Play')))];
+    if (j.kind === 'weld') return [note('Holds two parts together as one solid piece. On one part, it’s a fixed support: it stops the part moving and turning.'), ...pinShared(j)];
+    if (j.kind === 'load') {
+      const comp = () => { const v = Fo().tb(P.loadVector(scene, j)); return `${fmt(v[0], 1)} N, ${fmt(v[1], 1)} N`; };
+      const dirBtn = (a, label) => h('button', { type: 'button', 'aria-pressed': String(j.angle === a), onclick: () => { A.checkpoint(); j.angle = a; A.tweak(j); } }, label);
+      return [
+        note('A force pushing on the part at this point, like P in a statics problem. It acts the whole time, running or paused.'),
+        field({ id: 'i-F', label: 'Size', unit: 'N', min: 1, max: 100000, log: true, get: () => j.F, set: (v) => (j.F = Math.max(0, v)), ends: ['small', 'big'] }),
+        field({ id: 'i-ang', label: 'Direction θ', unit: '°', min: -180, max: 180, step: 1, get: () => j.angle, set: (v) => (j.angle = v), ends: ['−180°', '+180°'] }),
+        h('div', { class: 'seg', role: 'group', 'aria-label': 'Quick directions' }, dirBtn(-90, '↓ down'), dirBtn(90, '↑ up'), dirBtn(180, '← left'), dirBtn(0, '→ right')),
+        note('θ is measured anticlockwise from the +x axis: 0° points right, 90° up, −90° down.'),
+        toggle({ id: 'i-follow', label: 'Turns with the part', get: () => j.follow, set: (v) => (j.follow = v) }),
+        liveBox(stat('Components (x, y)', comp)),
+      ];
+    }
+    if (j.kind === 'couple') {
+      return [
+        note('A pure turning moment (a couple) on the part. It turns it without pushing it anywhere, so where it sits on the part doesn’t matter.'),
+        field({ id: 'i-M', label: 'Moment', unit: 'N·m', min: -1000, max: 1000, step: 1, get: () => j.M, set: (v) => (j.M = v), ends: ['clockwise', 'anticlockwise'] }),
+        note('+ is anticlockwise, − is clockwise.'),
+      ];
+    }
     if (j.kind === 'slider') {
       return [
         toggle({ id: 'i-limits', label: 'End stops', get: () => j.limits, set: (v) => (j.limits = v) }),
         toggle({ id: 'i-tilt', label: 'Block can tilt', get: () => !j.lock, set: (v) => { j.lock = !v; j.angle0 = P.angleOf(scene, j.b) - P.angleOf(scene, j.a); } }),
-        liveBox(stat('Position', () => `${fmt(j._s || 0)} m`), stat('Track force', () => (running() ? `${fmt(Math.abs(j._f || 0), 1)} N` : 'press Play'))),
+        liveBox(stat('Position', () => `${fmt(j._s || 0)} m`), stat('Track force', () => (running() ? `${fmt(Math.abs(fa(j)), 1)} N` : 'press Play'))),
       ];
     }
     return [];
@@ -261,11 +509,17 @@
   }
 
   function refresh() {
-    live = [];
+    live = []; panels = [];
     const it = A.S.selected;
     card.hidden = !it;
     if (!it) { card.replaceChildren(); return; }
     const isBody = M.isBody(it);
+    if (it.kind === 'pair') {
+      const close = h('button', { type: 'button', class: 'ib small', 'aria-label': 'Close', onclick: () => A.select(null) });
+      close.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+      card.replaceChildren(h('div', { class: 'insp-head' }, h('h2', {}, 'Two parts'), close), ...pairCard(it));
+      return;
+    }
     const name = h('h2', {}, M.kindName(it));
     if (it.label) {
       const i = it.label.indexOf('_');
@@ -276,10 +530,19 @@
     const head = h('div', { class: 'insp-head' }, name, close);
     const remove = h('button', { type: 'button', class: 'btn remove',
       onclick: () => { A.checkpoint(); M.remove(A.S.scene, it); A.select(null); A.changed(); } }, 'Remove');
-    card.replaceChildren(head, ...(isBody ? bodyCard(it) : jointCard(it)), remove);
+    // Parts and pins have two tabs: their settings, and the forces on them (statics and dynamics).
+    const tabbed = isBody || it.kind === 'pivot' || it.kind === 'weld';
+    const tab = tabbed ? A.S.opts.tab || 'setup' : 'setup';
+    const tabs = tabbed ? h('div', { class: 'seg tabs', role: 'group', 'aria-label': 'Show' }, ...[['setup', 'Setup'], ['forces', 'Forces']].map(([k, label]) =>
+      h('button', { type: 'button', 'aria-pressed': String(tab === k), onclick: () => { A.S.opts.tab = k; A.saveOpts(); refresh(); } }, label))) : null;
+    const body = tab === 'forces' ? (isBody ? [studyBox(it)] : [...pinShared(it), pinPanel(it)]) : [...(isBody ? bodyCard(it) : jointCard(it)), remove];
+    card.replaceChildren(head, ...(tabs ? [tabs] : []), ...body);
   }
 
-  function tick() { for (const [el, fn] of live) { const t = fn(); if (el.textContent !== t) el.textContent = t; } }
+  function tick() {
+    for (const [el, fn] of live) { const t = fn(); if (el.textContent !== t) el.textContent = t; }
+    for (const [el, build] of panels) build(el);
+  }
 
   function init(app, el) { A = app; card = el; }
 
