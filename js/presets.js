@@ -262,6 +262,243 @@
     return preload(s); // starts with the piston already holding the load
   }
 
+  // ---------- real machines ----------
+
+  // A shape given by its corners in world coordinates.
+  function shape(s, pts, props = {}) {
+    const c = P.polyCentroid(pts);
+    return M.addBody(s, Object.assign({ kind: 'poly', x: c[0], y: c[1], pts: pts.map(([x, y]) => [x - c[0], y - c[1]]) }, props));
+  }
+  // A thick band along a path (for bent parts like an excavator boom).
+  function band(path, t) {
+    const side = (sgn) => path.map((p, i) => {
+      const a = path[Math.max(0, i - 1)], b = path[Math.min(path.length - 1, i + 1)];
+      const [dx, dy] = [b[0] - a[0], b[1] - a[1]], d = Math.hypot(dx, dy);
+      return [p[0] - (sgn * t * dy) / d, p[1] + (sgn * t * dx) / d];
+    });
+    return [...side(1), ...side(-1).reverse()];
+  }
+  const glue = (s, b1, b2, p) => M.addJoint(s, { kind: 'weld', a: on(s, b1, ...p), b: b2 ? on(s, b2, ...p) : ground(...p), angle0: (b2 ? b2.a : 0) - b1.a });
+  const len = (p, q) => Math.hypot(q[0] - p[0], q[1] - p[1]);
+  const pistonOn = (s, a, b, props) => { const L = len(P.endWorld(s, a), P.endWorld(s, b)); return M.addJoint(s, Object.assign({ kind: 'piston', a, b, len0: L, mode: 'cycle', phase: 1 }, props)); };
+  // Where two circles cross: of the two answers, the one that scores lowest. Used to assemble
+  // linkages joint by joint from their link lengths.
+  function meet(c1, r1, c2, r2, score) {
+    const dx = c2[0] - c1[0], dy = c2[1] - c1[1], d = Math.hypot(dx, dy);
+    const a = (r1 * r1 - r2 * r2 + d * d) / (2 * d), hh = Math.sqrt(Math.max(0, r1 * r1 - a * a));
+    const bx = c1[0] + (a * dx) / d, by = c1[1] + (a * dy) / d;
+    const p = [bx + (hh * dy) / d, by - (hh * dx) / d], q = [bx - (hh * dy) / d, by + (hh * dx) / d];
+    return score(p) <= score(q) ? p : q;
+  }
+  const highest = (p) => p[1], lowest = (p) => -p[1];
+
+  // Oil pumpjack ("nodding donkey"). A motor turns the crank at 8 strokes a minute; the pitman
+  // arm rocks the walking beam on its Samson post, and the horsehead lifts the polished rod and
+  // the string of sucker rods hanging down the well (lumped here as one 150 kg load) on a cable
+  // bridle. The counterweight sits on the crank in line with the crank pin, so it balances the
+  // well load and the motor only has to supply the difference.
+  function pumpjack() {
+    const s = M.newScene();
+    const floor = 0.55, piv = [0, -1.7], O = [-1.7, -0.25], r = 0.45;
+    M.addBody(s, { kind: 'box', x: -0.3, y: floor + 0.1, w: 4.6, h: 0.2, mass: 10, fixed: true, color: 'light' }); // concrete pad
+    shape(s, [[-0.55, floor], [0.55, floor], [0.07, piv[1] + 0.1], [-0.07, piv[1] + 0.1]], { mass: 10, fixed: true }); // Samson post
+    M.addBody(s, { kind: 'box', x: O[0], y: (O[1] + floor) / 2 + 0.05, w: 0.7, h: floor - O[1] + 0.1, mass: 10, fixed: true, color: 'dark' }); // gearbox
+    const wellhead = M.addBody(s, { kind: 'box', x: 1.62, y: floor - 0.3, w: 0.36, h: 0.6, mass: 10, fixed: true, color: 'light' }); // wellhead
+    // walking beam with the horsehead on its front end
+    const head = [[1.25, -0.32], [1.42, -0.28], [1.55, -0.16], [1.62, 0], [1.6, 0.2], [1.52, 0.38], [1.4, 0.5], [1.25, 0.56]];
+    const beamPts = [[-1.75, -0.08], [1.25, -0.08], ...head, [1.25, 0.08], [-1.75, 0.08]].map(([x, y]) => [x + piv[0], y + piv[1]]);
+    const beam = shape(s, beamPts, { mass: 180, label: 'M_b' });
+    pinRods(s, beam, null, piv);
+    // crank arm with its counterweight, in line with the crank pin
+    const crank = M.addBody(s, { kind: 'box', x: O[0] + 0.2, y: O[1], w: 0.75, h: 0.14, mass: 20, color: 'dark' });
+    const cw = M.addBody(s, { kind: 'box', x: O[0] + 0.4, y: O[1], w: 0.34, h: 0.42, mass: 260, label: 'm_c', color: 'dark' });
+    glue(s, crank, cw, [O[0] + 0.4, O[1]]);
+    M.addJoint(s, { kind: 'pivot', a: on(s, crank, ...O), b: ground(...O), motor: 8, torque: 1500 });
+    const C = [O[0] + r, O[1]], tail = [piv[0] - 1.65, piv[1]];
+    const pitman = rod(s, C, tail, { mass: 15, ideal: false, label: 'L_p' });
+    pinRods(s, crank, pitman, C);
+    pinRods(s, pitman, beam, tail);
+    // bridle cable from the horsehead down to the polished rod, which slides in the wellhead
+    const top = [piv[0] + 1.62, piv[1] + 0.75];
+    const polished = M.addBody(s, { kind: 'box', x: top[0], y: top[1] + 0.45, w: 0.07, h: 0.9, mass: 150, label: 'm_w', color: 'ink' });
+    M.addJoint(s, { kind: 'slider', a: on(s, wellhead, top[0], top[1] + 0.45), b: { body: polished.id, x: 0, y: 0 }, dir: [0, 1], limits: false, lo: -1, hi: 1 });
+    M.addJoint(s, { kind: 'rope', a: on(s, beam, piv[0] + 1.62, piv[1]), b: { body: polished.id, x: 0, y: -0.45 }, length: 0.75 });
+    return s;
+  }
+
+  // Theo Jansen's Strandbeest leg, built from his "holy numbers" (lengths in cm, drawn here
+  // at 2 cm per cm). Joints follow Wang's two-circle construction (arXiv 2606.22129). One crank drives a mirrored pair of legs. The foot
+  // draws a path with a long flat bottom, so a walking beast's body glides along level.
+  function strandbeest() {
+    const s = M.newScene();
+    const k = 0.02, N = { a: 38, b: 41.5, c: 39.3, d: 40.1, e: 55.8, f: 39.4, g: 36.7, h: 65.7, i: 49, j: 50, k: 61.9, l: 7.8, m: 15 };
+    const n = (key) => N[key] * k;
+    const O = [0, -0.3], Mp = [O[0], O[1] - n('m')]; // crank straight up to start
+    const crank = rod(s, O, Mp, { label: 'm', ideal: false });
+    M.addJoint(s, { kind: 'pivot', a: on(s, crank, ...O), b: ground(...O), motor: 25, torque: 30 });
+    for (const sd of [-1, 1]) {
+      const Z = [O[0] + sd * n('a'), O[1] + n('l')];
+      const outer = (p) => -sd * p[0];
+      const P1 = meet(Mp, n('j'), Z, n('b'), highest), P2 = meet(Mp, n('k'), Z, n('c'), lowest);
+      const P3 = meet(Z, n('d'), P1, n('e'), outer), P4 = meet(P3, n('f'), P2, n('g'), outer);
+      const F = meet(P2, n('i'), P4, n('h'), lowest);
+      const bar = (p, q, lab) => rod(s, p, q, { ideal: false, label: sd < 0 ? lab : '' });
+      const j = bar(Mp, P1, 'j'), kk = bar(Mp, P2, 'k'), b = bar(Z, P1, 'b'), c = bar(Z, P2, 'c'), d = bar(Z, P3, 'd');
+      const e = bar(P1, P3, 'e'), f = bar(P3, P4, 'f'), g = bar(P2, P4, 'g'), h = bar(P4, F, 'h'), i = bar(P2, F, 'i');
+      const foot = M.addBody(s, { kind: 'disc', x: F[0], y: F[1], r: 0.04, mass: 0.3, color: 'ink', trace: true });
+      pinRods(s, crank, j, Mp); pinRods(s, j, kk, Mp);
+      pinRods(s, b, null, Z); pinRods(s, b, c, Z); pinRods(s, b, d, Z);
+      pinRods(s, j, b, P1); pinRods(s, b, e, P1);
+      pinRods(s, kk, c, P2); pinRods(s, c, g, P2); pinRods(s, c, i, P2);
+      pinRods(s, d, e, P3); pinRods(s, e, f, P3);
+      pinRods(s, f, g, P4); pinRods(s, g, h, P4);
+      pinRods(s, h, i, F); pinRods(s, h, foot, F);
+    }
+    return s;
+  }
+
+  // Excavator arm: boom, stick and bucket, each worked by its own hydraulic cylinder. The three
+  // cylinders run at different speeds, so the arm keeps finding new digging motions.
+  function excavator() {
+    const s = M.newScene();
+    s.settings.substeps = 200; // a heavy chain of parts on three stiff actuators
+    const floor = 0.6;
+    M.addBody(s, { kind: 'box', x: -1.6, y: floor - 0.2, w: 2.2, h: 0.4, mass: 10, fixed: true, color: 'dark' }); // tracks
+    shape(s, [[-2.6, floor - 0.4], [-0.55, floor - 0.4], [-0.55, -0.6], [-1.2, -0.6], [-1.35, -1.25], [-2.0, -1.25], [-2.0, -0.6], [-2.6, -0.6]], { mass: 10, fixed: true }); // house and cab
+    const B0 = [-0.75, -0.45], knee = [0.35, -1.9], BT = [1.3, -1.55];
+    const boom = shape(s, band([B0, knee, BT], 0.11), { mass: 250, label: 'M_1' });
+    pinRods(s, boom, null, B0);
+    const ST = [1.75, 0.0], u = [(BT[0] - ST[0]) / len(ST, BT), (BT[1] - ST[1]) / len(ST, BT)];
+    const tail = [BT[0] + u[0] * 0.5, BT[1] + u[1] * 0.5];
+    const stick = shape(s, band([tail, BT, ST], 0.08), { mass: 120, label: 'M_2' });
+    pinRods(s, stick, boom, BT);
+    const bk = [[0, 0], [0.18, -0.12], [0.42, -0.05], [0.58, 0.18], [0.6, 0.42], [0.38, 0.52], [0.36, 0.4], [0.44, 0.22], [0.3, 0.06], [0.12, 0.1]];
+    const bucket = shape(s, bk.map(([x, y]) => [ST[0] + x - 0.1, ST[1] + y - 0.05]), { mass: 60, label: 'm', color: 'dark' });
+    pinRods(s, bucket, stick, ST);
+    const lug = [ST[0] + 0.14, ST[1] - 0.24];
+    const at = (b, p) => on(s, b, ...p);
+    // each stroke is a share of the cylinder's starting length, kept short of any dead centre
+    const cyl = (a, b, speed, force, lo, hi) => { const j = pistonOn(s, a, b, { speed, force }); j.min = +(j.len0 * lo).toFixed(3); j.max = +(j.len0 * hi).toFixed(3); };
+    cyl(ground(-0.6, 0), at(boom, [-0.17, -1.03]), 0.09, 60000, 0.82, 1.12);
+    cyl(at(boom, [0.2, -2.0]), at(stick, tail), 0.12, 30000, 0.82, 1.12);
+    cyl(at(stick, [1.42, -1.15]), at(bucket, lug), 0.1, 15000, 0.97, 1.28);
+    return preload(s);
+  }
+
+  // Trebuchet: a 400 kg counterweight swings down and whips the long arm round; the sling
+  // swings the 5 kg stone out faster still. There's no release hook, so the stone stays in the
+  // sling and keeps whirling, but v_max at the top shows the speed it would leave at.
+  function trebuchet() {
+    const s = M.newScene();
+    s.settings.air = 0; s.settings.substeps = 200;
+    const floor = 0.5, ax = [0, -2.5];
+    M.addBody(s, { kind: 'box', x: 0, y: floor + 0.08, w: 4.4, h: 0.16, mass: 10, fixed: true, color: 'light' });
+    shape(s, [[-1.0, floor], [-0.85, floor], [0.04, ax[1]], [-0.04, ax[1]]], { mass: 10, fixed: true });
+    shape(s, [[0.85, floor], [1.0, floor], [0.04, ax[1]], [-0.04, ax[1]]], { mass: 10, fixed: true });
+    const th = 52 * D, Ll = 2.6, Ls = 0.7;
+    const tip = [ax[0] - Ll * Math.cos(th), ax[1] + Ll * Math.sin(th)], back = [ax[0] + Ls * Math.cos(th), ax[1] - Ls * Math.sin(th)];
+    const arm = bar(s, tip, back, 0.1, 30, 'L', 'grey');
+    pinRods(s, arm, null, ax);
+    const cw = M.addBody(s, { kind: 'box', x: back[0], y: back[1] + 0.45, w: 0.6, h: 0.6, mass: 400, label: 'M', color: 'dark' });
+    M.addJoint(s, { kind: 'pivot', a: on(s, arm, ...back), b: on(s, cw, ...back) });
+    const sling = floor - 0.2 - tip[1];
+    const stone = M.addBody(s, { kind: 'disc', x: tip[0], y: tip[1] + sling, r: 0.12, mass: 5, label: 'm', color: 'ink', trace: true });
+    M.addJoint(s, { kind: 'rope', a: on(s, arm, ...tip), b: { body: stone.id, x: 0, y: 0 }, length: sling });
+    return s;
+  }
+
+  // Tuned mass damper, as in Taipei 101. Two identical towers, both knocked sideways at the
+  // start. The right one has a pendulum inside, tuned to swing at nearly the tower's own rate
+  // and dragged by a damper: it soaks up the sway in a few swings while the plain tower rocks on.
+  function tunedMassDamper() {
+    const s = M.newScene();
+    s.settings.air = 0;
+    const H = 3, W = 1.0, m = 40, k = 1000, guy = 1.2, tilt = 4 * D, md = 3;
+    // rocking about the base pin: I θ'' = -(k_lat H² − m g H/2) θ, with two guy springs at angle α
+    const cos2 = (guy * guy) / (guy * guy + H * H), I = m * (H * H / 3 + W * W / 12);
+    const w0 = Math.sqrt((2 * k * cos2 * H * H - (m * 9.81 * H) / 2) / I);
+    const mu = (md * H * H) / I, f = 1 / (1 + mu), zeta = Math.sqrt((3 * mu) / (8 * (1 + mu) ** 3)); // Den Hartog's tuning
+    const Lp = 9.81 / (f * w0) ** 2, c = 2 * zeta * md * f * w0;
+    M.addBody(s, { kind: 'box', x: 0, y: 0.7, w: 6.6, h: 0.2, mass: 10, fixed: true, color: 'light' });
+    for (const [cx, damped] of [[-1.6, false], [1.6, true]]) {
+      const base = [cx, 0.6];
+      const tower = M.addBody(s, { kind: 'box', x: cx, y: base[1] - H / 2, w: W, h: H, hollow: true, wall: 0.06, mass: m, label: damped ? 'M' : 'M_0' });
+      pinRods(s, tower, null, base);
+      for (const sd of [-1, 1]) {
+        const topC = [cx + (sd * W) / 2, base[1] - H], foot = [cx + sd * (W / 2 + guy), base[1]];
+        M.addJoint(s, { kind: 'spring', a: on(s, tower, ...topC), b: ground(...foot), k, c: 0, rest: len(topC, foot), coils: 16, label: sd < 0 && !damped ? 'k' : '' });
+      }
+      if (damped) {
+        const hang = [cx, base[1] - H + 0.1], bob = [cx, hang[1] + Lp];
+        const ball = M.addBody(s, { kind: 'disc', x: bob[0], y: bob[1], r: 0.16, mass: md, label: 'm_d', color: 'ink' });
+        M.addJoint(s, { kind: 'rope', a: on(s, tower, ...hang), b: { body: ball.id, x: 0, y: 0 }, length: Lp });
+        const wallP = [cx + W / 2 - 0.06, bob[1]];
+        M.addJoint(s, { kind: 'damper', a: { body: ball.id, x: 0, y: 0 }, b: on(s, tower, ...wallP), c, len0: len(bob, wallP), label: 'c' });
+      }
+      // knock the tower over a little: rotate everything on it about the base pin
+      P.index(s);
+      for (const b of s.bodies) {
+        if (b.fixed || Math.abs(b.x - cx) > 1.3 || b.y > 0.6) continue;
+        const dx = b.x - base[0], dy = b.y - base[1];
+        [b.x, b.y] = [base[0] + dx * Math.cos(tilt) - dy * Math.sin(tilt), base[1] + dx * Math.sin(tilt) + dy * Math.cos(tilt)];
+        if (b.kind !== 'disc') b.a += tilt;
+      }
+    }
+    return s;
+  }
+
+  // Windscreen wipers at real car size: a motor turns a short crank, a long link rocks the
+  // first wiper's pivot, and a second link copies that motion to the other wiper (a
+  // parallelogram, so both sweep together, about 80° each). The blade tips move at about 2 m/s.
+  function wipers() {
+    const s = M.newScene();
+    M.addBody(s, { kind: 'box', x: -0.45, y: 0.22, w: 1.7, h: 0.06, mass: 10, fixed: true }); // the scuttle panel under the glass
+    // crank 8 cm, link 50 cm, rocker 12.5 cm: the crank's throw rocks the rocker ±40°, and the
+    // lengths keep well clear of the point where the linkage would jam
+    const R = 0.125, Lc = 0.5, cr = 0.08, W1 = [0, 0.05], W2 = [-0.75, 0.05];
+    const O = [W1[0] + Lc, W1[1] + R], C = [O[0], O[1] - cr];
+    const T1 = meet(W1, R, C, Lc, lowest), T2 = [T1[0] + W2[0] - W1[0], T1[1]];
+    const crank = rod(s, O, C, { ideal: false });
+    M.addJoint(s, { kind: 'pivot', a: on(s, crank, ...O), b: ground(...O), motor: 40, torque: 6 });
+    const link1 = rod(s, C, T1, { ideal: false }), link2 = rod(s, T1, T2, { ideal: false });
+    pinRods(s, crank, link1, C);
+    // Each arm is glued to its rocker. At the middle of the swing the rocker points straight
+    // down and the arm points 45° up, so the arm sweeps from nearly flat to nearly upright.
+    const dev = Math.atan2(T1[1] - W1[1], T1[0] - W1[0]) - 90 * D, ang = -45 * D + dev;
+    for (const [W, T, lab] of [[W1, T1, 'L_1'], [W2, T2, 'L_2']]) {
+      const rocker = rod(s, W, T, { ideal: false });
+      const tipP = [W[0] + 0.6 * Math.cos(ang), W[1] + 0.6 * Math.sin(ang)];
+      const arm = rod(s, W, tipP, { ideal: false, mass: 0.3, label: lab });
+      const blade = M.addBody(s, { kind: 'disc', x: tipP[0], y: tipP[1], r: 0.015, mass: 0.1, color: 'ink', trace: true });
+      pinRods(s, rocker, null, W);
+      glue(s, rocker, arm, W);
+      pinRods(s, arm, blade, tipP);
+      pinRods(s, rocker, link2, T);
+      if (W === W1) pinRods(s, rocker, link1, T);
+    }
+    return s;
+  }
+
+  // Tower crane: a trolley runs out and back along the jib on a hydraulic ram, and the 500 kg
+  // load swings on its cable every time the trolley starts or stops. Crane drivers time their
+  // moves to cancel that swing; try changing the ram's speed to see how hard it is.
+  function towerCrane() {
+    const s = M.newScene();
+    const floor = 0.6, jibY = -3.2;
+    M.addBody(s, { kind: 'box', x: 0, y: floor + 0.15, w: 1.4, h: 0.3, mass: 10, fixed: true, color: 'dark' });
+    M.addBody(s, { kind: 'box', x: 0, y: (floor + jibY) / 2, w: 0.32, h: floor - jibY, mass: 10, fixed: true, hollow: true, wall: 0.05 }); // mast
+    const jib = M.addBody(s, { kind: 'box', x: 1.0, y: jibY - 0.1, w: 5.6, h: 0.2, mass: 10, fixed: true });
+    shape(s, [[-0.12, jibY - 0.2], [0.12, jibY - 0.2], [0, jibY - 1.1]], { mass: 10, fixed: true }); // A-frame
+    M.addBody(s, { kind: 'box', x: -1.35, y: jibY + 0.3, w: 0.7, h: 0.6, mass: 10, fixed: true, color: 'dark', label: 'M_c' }); // counterweight
+    const x0 = 1.0;
+    const trolley = M.addBody(s, { kind: 'box', x: x0, y: jibY + 0.1, w: 0.36, h: 0.2, mass: 80, color: 'light' });
+    M.addJoint(s, { kind: 'slider', a: on(s, jib, x0, jibY + 0.1), b: { body: trolley.id, x: 0, y: 0 }, dir: [1, 0], limits: true, lo: -0.6, hi: 2.4 });
+    const cable = 2.6, load = M.addBody(s, { kind: 'box', x: x0, y: jibY + 0.2 + cable + 0.2, w: 0.7, h: 0.4, mass: 500, label: 'm', color: 'dark', trace: true });
+    M.addJoint(s, { kind: 'rope', a: { body: trolley.id, x: 0, y: 0.1 }, b: { body: load.id, x: 0, y: -0.2 }, length: cable });
+    M.addJoint(s, { kind: 'piston', a: on(s, jib, 0.25, jibY + 0.1), b: { body: trolley.id, x: -0.18, y: 0 }, min: 0.55, max: 2.6, len0: 0.57, speed: 0.6, force: 4000, mode: 'cycle', phase: 1 });
+    return s;
+  }
+
   ML.Presets = [
     { id: 'frame', name: 'The swinging frame', blurb: 'The mechanism from your video.', build: swingingFrame },
     { id: 'atwood', name: 'Atwood machine', blurb: 'Two masses on a pulley. The heavier one wins, slowly.', build: atwood },
@@ -274,6 +511,13 @@
     { id: 'coupled', name: 'Coupled oscillators', blurb: 'Two blocks passing their energy back and forth through springs.', build: coupledOscillators },
     { id: 'piston', name: 'Crank and slider', blurb: 'A motor-driven wheel pushing a slider, like an engine in reverse.', build: crankPiston },
     { id: 'springpend', name: 'Spring pendulum', blurb: 'A weight on a spring that swings and bounces at once.', build: springPendulum },
+    { id: 'pumpjack', group: 'Real machines', name: 'Oil pumpjack', blurb: 'The nodding donkey: a counterweighted crank rocks the beam and lifts the well rods.', build: pumpjack },
+    { id: 'excavator', group: 'Real machines', name: 'Excavator arm', blurb: 'Boom, stick and bucket, each on its own hydraulic cylinder.', build: excavator },
+    { id: 'crane', group: 'Real machines', name: 'Tower crane', blurb: 'The trolley runs along the jib and the 500 kg load swings on its cable.', build: towerCrane },
+    { id: 'tmd', group: 'Real machines', name: 'Tuned mass damper', blurb: 'Two swaying towers. The one with a pendulum inside (like Taipei 101) calms down fast.', build: tunedMassDamper },
+    { id: 'wipers', group: 'Real machines', name: 'Windscreen wipers', blurb: 'A motor crank and two links sweep both wipers together.', build: wipers },
+    { id: 'strandbeest', group: 'Real machines', name: 'Strandbeest legs', blurb: "Theo Jansen's walking linkage. Watch the feet draw a flat-bottomed stride.", build: strandbeest },
+    { id: 'trebuchet', group: 'Real machines', name: 'Trebuchet', blurb: 'A 400 kg counterweight whips a stone round on a sling. Check v_max.', build: trebuchet },
     { id: 'empty', name: 'Blank sheet', blurb: 'Start from nothing.', build: () => M.newScene() },
   ];
 })();

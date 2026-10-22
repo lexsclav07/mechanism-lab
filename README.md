@@ -10,6 +10,18 @@ Others include an Atwood machine, a quarter-car suspension, an F1 front suspensi
 wishbones, pushrods and rockers on a shaker rig), a double pendulum, a four-bar linkage, a
 motor-driven rod linkage and a piston-driven scissor lift.
 
+The "Real machines" examples are modelled on things you can go and look at:
+
+| Example | What it shows |
+|---|---|
+| Oil pumpjack | A nodding donkey at 8 strokes a minute. The crank counterweight balances the 150 kg well load. |
+| Excavator arm | Boom, stick and bucket on three hydraulic cylinders, each stroke kept clear of dead centre. |
+| Tower crane | A trolley runs along the jib and the 500 kg load swings on its cable. |
+| Tuned mass damper | Two towers knocked sideways. The one with a tuned pendulum and damper inside (like Taipei 101, tuned with Den Hartog's formulas) settles in about 20 s. The other keeps rocking. |
+| Windscreen wipers | Crank-rocker plus parallelogram at real car size. Both arms sweep about 80°. |
+| Strandbeest legs | Theo Jansen's linkage from his holy numbers. The feet trace the famous flat-bottomed stride. |
+| Trebuchet | A 400 kg counterweight whips a stone round on a sling at about 30 m/s. |
+
 ## Running it
 
 Open `index.html` in any browser (Firefox or Chrome on Fedora or Windows both work). There's no build
@@ -50,7 +62,8 @@ directly, so pins and rods don't drift apart. Springs and weight are ordinary fo
 solved implicitly so even very stiff ones stay stable. Motors and pistons are force-limited speed
 controllers, so an overloaded actuator really stalls. A motor also adds a little rotor inertia, so a
 light crank doesn't jitter. Pistons slow down near the ends of their stroke and have a hydraulic
-cushion in the last 2 cm, like real cylinders, so they don't slam into their stops. A massless
+cushion in the last 2 cm, like real cylinders, so they don't slam into their stops. After turning
+round they ramp back up to speed instead of jumping straight to it. A massless
 rod between two pins is solved as a single distance constraint. Pins on light rods get extra
 solver passes, so a 0.1 kg rod can carry a 20 kg load without stretching. Pulley ropes wrap round the wheel, and the wrap
 counts towards the rope's length.

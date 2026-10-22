@@ -420,9 +420,10 @@
     const v1 = A ? [A.vx - A.av * r1y, A.vy + A.av * r1x] : [0, 0], v2 = B ? [B.vx - B.av * r2y, B.vy + B.av * r2x] : [0, 0];
     const vlen = (v2[0] - v1[0]) * nx + (v2[1] - v1[1]) * ny;
     // end-of-stroke cushioning, like a real hydraulic cylinder: slow down over the last bit of
-    // travel (never below 15%) so turning round isn't a hammer blow
-    const toEnd = j.phase > 0 ? j.max - len : len - j.min;
-    const cushion = Math.max(0.15, Math.min(1, toEnd / (j.speed * 0.2)));
+    // travel and speed back up over the first bit after turning round (never below 15%), so
+    // turning round isn't a hammer blow
+    const toEnd = j.phase > 0 ? j.max - len : len - j.min, fromEnd = j.phase > 0 ? len - j.min : j.max - len;
+    const ramp = j.speed * 0.2, cushion = Math.max(0.15, Math.min(1, toEnd / ramp, fromEnd / ramp));
     const F = drive(j, j.phase * j.speed * cushion - vlen, j._gain || 1, j.force, h); // + pushes the ends apart
     const fx = F * nx, fy = F * ny;
     if (A) { A._fx -= fx; A._fy -= fy; A._t -= r1x * fy - r1y * fx; }

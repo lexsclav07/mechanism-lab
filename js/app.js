@@ -157,6 +157,7 @@
     S.selected = null; follow(null); ML.Editor.cancel();
     fitView(); changed();
     if (autoplay && S.scene.bodies.length) play();
+    if (pr.id !== 'empty') hint(pr.blurb, 5000);
   }
 
   function setTool(t) {
@@ -294,9 +295,16 @@
   }
 
   function fillExamples(pop) {
-    pop.replaceChildren(...ML.Presets.map((p) => el('button', { type: 'button', class: 'pick',
-      onclick: () => { closePops(); loadPreset(p.id, p.id !== 'empty'); } },
-    el('b', {}, p.name), el('small', {}, p.blurb))));
+    const items = [];
+    let group = null;
+    for (const p of ML.Presets) {
+      const g = p.group || 'Classics';
+      if (p.id !== 'empty' && g !== group) { items.push(el('h3', {}, g)); group = g; }
+      if (p.id === 'empty') items.push(el('hr'));
+      items.push(el('button', { type: 'button', class: 'pick', onclick: () => { closePops(); loadPreset(p.id, p.id !== 'empty'); } },
+        el('b', {}, p.name), el('small', {}, p.blurb)));
+    }
+    pop.replaceChildren(...items);
   }
 
   function fillGravity(pop) {
