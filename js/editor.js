@@ -590,8 +590,16 @@
     A.S.drag = null; A.S.poseDrag = null;
   }
 
+  const capsHeld = new Map(); // pointer id → key cap it's holding down
   function onDown(e) {
     canvas.setPointerCapture(e.pointerId);
+    // a key cap on the board works like the key: hold it to drive
+    const cap = R.keyAt(e.offsetX, e.offsetY);
+    if (cap) {
+      capsHeld.set(e.pointerId, cap); ML.Controls.press(cap, A.S.scene);
+      if (!A.S.running) A.play();
+      return;
+    }
     pointers.set(e.pointerId, [e.offsetX, e.offsetY]);
     if (pointers.size === 2) { cancel(); startPinch(); return; }
     if (pointers.size > 2) return;
@@ -619,6 +627,7 @@
       op.last = [sx, sy]; return;
     }
     const t = A.S.tool;
+    if (!op && R.keyAt(sx, sy)) { canvas.style.cursor = 'pointer'; A.S.hover = null; return; } // a key cap
     if (op || t === 'poly' || t === 'pulley') { tools[t].move(sx, sy); return; }
     // hovering
     if (t === 'select' || t === 'erase' || t === 'camera') {
@@ -634,6 +643,7 @@
   }
 
   function onUp(e) {
+    if (capsHeld.has(e.pointerId)) { ML.Controls.release(capsHeld.get(e.pointerId)); capsHeld.delete(e.pointerId); return; }
     pointers.delete(e.pointerId);
     if (pinch) { if (pointers.size < 2) pinch = null; op = null; return; }
     if (op && op.type === 'pan') { op = null; return; }
@@ -662,7 +672,10 @@
     el.addEventListener('pointerdown', onDown);
     el.addEventListener('pointermove', onMove);
     el.addEventListener('pointerup', onUp);
-    el.addEventListener('pointercancel', (e) => { pointers.delete(e.pointerId); pinch = null; cancel(); });
+    el.addEventListener('pointercancel', (e) => {
+      if (capsHeld.has(e.pointerId)) { ML.Controls.release(capsHeld.get(e.pointerId)); capsHeld.delete(e.pointerId); }
+      pointers.delete(e.pointerId); pinch = null; cancel();
+    });
     el.addEventListener('pointerleave', () => { if (!op) { A.S.hover = null; A.S.snap = null; } });
     el.addEventListener('wheel', onWheel, { passive: false });
     el.addEventListener('contextmenu', (e) => e.preventDefault());

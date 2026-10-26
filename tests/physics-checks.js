@@ -1,8 +1,8 @@
 // Physics checks: run the solver headless and compare against textbook answers.
 // Run with:  node tests/physics-checks.js   (no dependencies; exits 1 if anything fails)
 global.window = {};
-for (const f of ['physics', 'model', 'presets', 'forces']) require(`../js/${f}.js`);
-const { Phys: P, Model: M, Presets, Forces: Fo } = window.ML;
+for (const f of ['physics', 'model', 'presets', 'forces', 'controls']) require(`../js/${f}.js`);
+const { Phys: P, Model: M, Presets, Forces: Fo, Controls: K } = window.ML;
 
 let failed = 0;
 function check(name, got, want, tol) {
@@ -262,6 +262,31 @@ const reactions = (s, b) => Fo.onBody(s, b).filter((it) => it.kind === 'reaction
   const R = Fo.onBody(z, b).filter((it) => it.kind === 'reaction').map((r) => Fo.tb(r.f)[1]);
   check('paused beam example: reaction at A (N)', R[0], 700, 2);
   check('paused beam example: reaction at B (N)', R[1], 300, 2);
+}
+
+// Keyboard control: holding a key drives, letting go holds still (no sag, no jerks).
+{
+  const key = (code) => ({ code, repeat: false, preventDefault() {} });
+  const drive = (s, seconds, onFrame) => { for (let i = 0; i < seconds * 60; i++) { K.update(s, 1 / 60); P.step(s, 1 / 60); if (onFrame) onFrame(); } };
+  const load = (id) => { const s = M.load(M.serialize(Presets.find((p) => p.id === id).build())); s._wantEnds = false; return s; };
+
+  const ex = load('drive-excavator'), boom = ex.joints.find((j) => j.label === 'boom'), len = () => P.jointLength(ex, boom);
+  drive(ex, 0.5); const l0 = len();
+  K.down(key('KeyW'), ex); drive(ex, 1); K.up(key('KeyW')); const l1 = len();
+  drive(ex, 0.5); const l2 = len(); drive(ex, 2);
+  check('excavator: holding W extends the boom (m)', l1 - l0 > 0.05 ? 1 : 0, 1, 0);
+  check('excavator: let go, the boom holds (sag in 2 s, mm)', (l2 - len()) * 1000, 0, 0.5);
+
+  const br = load('drive-bridge'), deck = br.bodies.find((b) => b.label === 'M');
+  let spin = 0;
+  K.down(key('KeyW'), br); drive(br, 4, () => { spin = Math.max(spin, Math.abs(deck.av)); }); K.up(key('KeyW'));
+  check('drawbridge: the winch raises it smoothly (fastest turn, rad/s)', spin, 0.15, 0.15);
+  check('drawbridge: raised after 4 s of W (degrees)', -deck.a * 180 / Math.PI > 20 ? 1 : 0, 1, 0);
+
+  const arm = load('drive-arm'), up = arm.bodies.find((b) => b.label === 'L_1');
+  drive(arm, 0.5); const a0 = up.a; drive(arm, 2);
+  check('robot arm: brakes hold it still with no key (degrees moved in 2 s)', Math.abs(up.a - a0) * 180 / Math.PI, 0, 0.5);
+  K.releaseAll();
 }
 
 // Every part of every example obeys ΣF = m·a and ΣM_G = I·α, using the frame-averaged forces.

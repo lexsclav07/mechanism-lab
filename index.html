@@ -161,6 +161,16 @@
   .dgm-line { fill: none; stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; }
   .dgm-dot { fill: var(--accent); stroke: var(--paper); stroke-width: 2; }
   .dgm-x { stroke: var(--accent); stroke-width: 1; }
+  /* keyboard control */
+  .keys { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--rule); }
+  .keys h3.sec { margin: 0; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; color: var(--ink-2); }
+  .keyrow { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 8px; font-size: 13px; font-weight: 500; }
+  .keyrow small { grid-column: 1 / -1; font-size: 11.5px; font-weight: 400; color: var(--ink-2); }
+  .keyset { display: inline-flex; align-items: center; gap: 4px; }
+  .keycap { min-width: 34px; height: 30px; padding: 0 8px; border: 1px solid var(--ink); border-bottom-width: 3px; border-radius: 5px; background: var(--paper); font: 600 13px var(--font-num); }
+  .keycap.none { border-color: var(--rule); color: var(--ink-2); font-weight: 400; }
+  .keycap.listening { border-color: var(--accent); color: var(--accent); font: 500 12px var(--font-ui); }
+  .keyx { font-size: 16px; line-height: 1; color: var(--ink-2); }
   .btn.remove { justify-self: start; border-color: var(--rule); color: var(--ink-2); }
   .btn.remove:hover { color: var(--ink); border-color: var(--ink); }
 
@@ -351,6 +361,7 @@
 <script src="js/model.js"></script>
 <script src="js/forces.js"></script>
 <script src="js/rods.js"></script>
+<script src="js/controls.js"></script>
 <script src="js/editor.js"></script>
 <script src="js/inspector.js"></script>
 <script src="js/presets.js"></script>

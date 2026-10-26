@@ -63,6 +63,25 @@ live readouts. Space plays and pauses, R resets to where you last pressed Play, 
 undo and redo. Builds save themselves in the browser, and "Save or load" in the ⋯ menu copies a
 build as text.
 
+## Driving machines with the keyboard
+
+Any motor, piston or rope can be put on keys, so you can build a machine and then drive it.
+
+- **Motor:** in its card set "Runs" to "On keys" (it picks A / D, then ← / →, J / L…). It turns
+  while a key is held, or "Press on / off" makes the keys switches. When it stops it can brake
+  (hold still, up to its max torque) or coast. Its speed setting is its top speed.
+- **Piston:** set "Does" to "Keys" (W / S, then ↑ / ↓, I / K…). Hold one key to push out and the
+  other to pull in. Let go and the valve shuts, so it holds where it is.
+- **Rope or pulley rope:** switch on "Winch on keys" (Q / E…) to reel it in or let it out, at the
+  winch speed you set. That's how the crane hoists and the drawbridge lifts.
+
+Tap a key button in the card and press any key to change it (Space stays Play / Pause). A bound
+key takes over that key's shortcut, and the card says when it does. One key can drive several
+parts at once, like both wheels of a cart. Pressing a bound key while paused starts the machine.
+The keys are drawn beside each part, light up while held, and can be pressed with a mouse or a
+finger too (on a phone or tablet). The "Drive it" examples are ready to go: an excavator, a tower
+crane, a robot arm and a drawbridge.
+
 ## Studying engineering mechanics with it
 
 Everything uses the textbook sign convention: x to the right, y up, angles and moments
@@ -122,6 +141,7 @@ js/model.js         scene data, defaults, save/load (old builds' rods convert to
 js/rods.js          rod rules: what a rod end joins, shared pins, ground switch, end handles
 js/editor.js        the tools: placing parts, grabbing, snapping, camera follow
 js/inspector.js     the card for the tapped part
+js/controls.js      keyboard control: key bindings, held keys → motor, piston and winch commands
 js/forces.js        free-body diagrams, reactions, N/V/M inside members (engineering mechanics)
 js/presets.js       example scenes
 js/app.js           state, loop, undo, menus, autosave
@@ -139,4 +159,5 @@ slack, damper terminal speed, piston force and stall, motor speed under load, ne
 grab hand, a rod pendulum's period, rod chains, a motor crank on a light rod, pins healing when
 a part is deleted, that old saves move identically after conversion, statics answers (beam
 reactions and bending moments, a beam under its own weight, a cantilever, a truss by the method
-of joints), ΣF = m·a and ΣM = I·α for every part of every example, and that every example runs for 10 seconds with its joints holding.
+of joints), keyboard control (a piston drives and then holds, a winch lifts smoothly, motor
+brakes hold), ΣF = m·a and ΣM = I·α for every part of every example, and that every example runs for 10 seconds with its joints holding.

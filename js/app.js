@@ -162,7 +162,20 @@
     fitView(); changed();
     if (autoplay && S.scene.bodies.length) play();
     if (pr.opts) { Object.assign(S.opts, pr.opts); saveOpts(); } // e.g. statics examples show their support reactions
-    if (pr.id !== 'empty') hint(pr.blurb, 5000);
+    if (pr.id !== 'empty') hint(keysHint() || pr.blurb, keysHint() ? 9000 : 5000);
+  }
+
+  // "Keys: A / D motor, W / S piston P_1" for a build that's driven from the keyboard.
+  function keysHint() {
+    const C = ML.Controls, seen = new Map();
+    for (const b of C.bindings(S.scene)) {
+      const name = b.j.label ? b.j.label.replace('_', '') : b.j.kind === 'pivot' ? 'motor' : b.j.kind === 'piston' ? 'piston' : 'winch';
+      if (!seen.has(b.j)) seen.set(b.j, { name, keys: [] });
+      seen.get(b.j).keys.push(b.code);
+    }
+    if (!seen.size) return '';
+    // keys listed as they sit on the keyboard (A / D, W / S)
+    return 'Keys: ' + [...seen.values()].map((x) => `${x.keys.sort((a, b) => C.keyOrder(a) - C.keyOrder(b)).map(C.label).join(' / ')} ${x.name}`).join(', ') + '. Hold them to drive it.';
   }
 
   function setTool(t) {
@@ -227,6 +240,7 @@
   // ---------- the loop ----------
 
   function advance(dt) {
+    ML.Controls.update(S.scene, dt); // keys held → motor, piston and winch commands
     P.step(S.scene, dt, S.drag);
     if (S.scene.bodies.some((b) => !Number.isFinite(b.x + b.y + b.a))) { // blew up: undo the run
       S.running = false;
@@ -423,8 +437,15 @@
     const tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea') { if (e.key === 'Escape') e.target.blur(); return; }
     if ($('scene-dialog').open) return;
-    if (ML.Editor.key(e)) { e.preventDefault(); return; }
     const mod = e.ctrlKey || e.metaKey;
+    // keys bound to motors, pistons and winches come first (they take over a shortcut on the
+    // same key); pressing one while paused starts the machine
+    const binding = ML.Controls.listening();
+    if ((binding || !mod) && ML.Controls.down(e, S.scene)) {
+      if (!binding && !S.running) play();
+      return;
+    }
+    if (ML.Editor.key(e)) { e.preventDefault(); return; }
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
     if (mod) return;
@@ -473,6 +494,8 @@
     document.addEventListener('pointerdown', (e) => { if (!e.target.closest('.pop, [aria-haspopup]')) closePops(); });
     wireTray(); wireSceneDialog();
     document.addEventListener('keydown', onKey);
+    document.addEventListener('keyup', (e) => ML.Controls.up(e));
+    addEventListener('blur', () => ML.Controls.releaseAll()); // keys let go while away count as let go
     addEventListener('pagehide', autosave);
 
     // what to show first: a live-update snapshot, then the autosave, then the video's contraption
@@ -494,7 +517,7 @@
     requestAnimationFrame(frame);
   }
 
-  const App = { S, checkpoint, changed, tweak, touched, spawn, select, pause, play, hint, saveOpts, follow, analysis: () => S.an };
+  const App = { S, checkpoint, changed, tweak, touched, spawn, select, pause, play, hint, saveOpts, follow, analysis: () => S.an, keysHint };
   ML.App = App;
 
   // Keep the build across live updates of this page.

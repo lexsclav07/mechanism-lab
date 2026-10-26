@@ -405,9 +405,18 @@
     return out;
   }
 
+  // On keys (j.keyFwd / j.keyRev set), _cmd is the driver's command from -1 to 1 (the app eases
+  // it in and out). Let go and a motor either brakes (holds still) or coasts (no torque at all).
+  const onKeys = (j) => !!(j.keyFwd || j.keyRev);
   function motorDrive(scene, j, h) {
     const A = bodyOf(scene, j.a), B = bodyOf(scene, j.b);
-    const omega = (j.motor * 2 * Math.PI) / 60, rel = (B ? B.av : 0) - (A ? A.av : 0);
+    let rpm = j.motor;
+    if (onKeys(j)) {
+      const c = j._cmd || 0;
+      if (Math.abs(c) < 1e-3 && j.idle === 'coast') { j._torque = 0; j.integ = 0; return; }
+      rpm = Math.abs(j.motor) * c;
+    }
+    const omega = (rpm * 2 * Math.PI) / 60, rel = (B ? B.av : 0) - (A ? A.av : 0);
     const tau = drive(j, omega - rel, j._gain || 1, j.torque, h);
     if (A) A._t -= tau;
     if (B) B._t += tau;
@@ -423,6 +432,7 @@
     if (len < 1e-9) return;
     if (j.mode === 'extend') j.phase = 1;
     else if (j.mode === 'retract') j.phase = -1;
+    else if (j.mode === 'keys') { /* the driver decides: see dir below */ }
     else if (j.phase > 0 && len >= j.max - 1e-3) j.phase = -1; // turning round doesn't change the load it holds
     else if (j.phase < 0 && len <= j.min + 1e-3) j.phase = 1;
     const nx = dx / len, ny = dy / len, [r1x, r1y] = arm(A, p1), [r2x, r2y] = arm(B, p2);
@@ -431,9 +441,11 @@
     // end-of-stroke cushioning, like a real hydraulic cylinder: slow down over the last bit of
     // travel and speed back up over the first bit after turning round (never below 15%), so
     // turning round isn't a hammer blow
-    const toEnd = j.phase > 0 ? j.max - len : len - j.min, fromEnd = j.phase > 0 ? len - j.min : j.max - len;
+    // dir: +1 out, -1 in. On keys it's the driver's command, and 0 shuts the valve: it holds still.
+    const dir = j.mode === 'keys' ? j._cmd || 0 : j.phase;
+    const toEnd = dir > 0 ? j.max - len : len - j.min, fromEnd = dir > 0 ? len - j.min : j.max - len;
     const ramp = j.speed * 0.2, cushion = Math.max(0.15, Math.min(1, toEnd / ramp, fromEnd / ramp));
-    const F = drive(j, j.phase * j.speed * cushion - vlen, j._gain || 1, j.force, h); // + pushes the ends apart
+    const F = drive(j, dir * j.speed * cushion - vlen, j._gain || 1, j.force, h); // + pushes the ends apart
     const fx = F * nx, fy = F * ny;
     if (A) { A._fx -= fx; A._fy -= fy; A._t -= r1x * fy - r1y * fx; }
     if (B) { B._fx += fx; B._fy += fy; B._t += r2x * fy - r2y * fx; }
@@ -746,7 +758,11 @@
     for (const j of scene.joints) { j._acc = [0, 0, 0, 0, 0]; j._ae = null; if (!ends) j._avgEnds = null; }
     for (const b of scene.bodies) { b._facc = 0; b._v0 = [b.vx, b.vy, b.av]; b._p0 = [b.x, b.y, b.a]; }
     const hacc = [0, 0, 0];
+    // Winches change a rope's length a little every substep. All at once, a frame's worth of
+    // reeling would be closed in one substep, and that turns into a violent jerk.
+    const winches = scene.joints.filter((j) => j._lenRate);
     for (let s = 0; s < n; s++) {
+      for (const j of winches) j.length = Math.min(j.winchMax ?? Infinity, Math.max(j.winchMin ?? 0.05, j.length + j._lenRate * h));
       // 1. forces: weight (which can be negative: it floats up), springs, motors, pistons, the hand
       for (const b of scene.bodies) { b._fx = 0; b._fy = b.mass * S.gravity * (b.gscale ?? 1); b._t = 0; }
       for (const j of scene.joints) {
@@ -847,6 +863,6 @@
   ML.Phys = {
     polyArea, polyCentroid, shapeArea, innerSize, updateMass, index,
     toWorld, toLocal, rotate, bodyOf, angleOf, endWorld, hitBody, jointLength, pulleyGeom, barAxial, poseIdeal,
-    step, pose, energy, clusterMass, loadVector, endForces,
+    step, pose, energy, clusterMass, loadVector, endForces, onKeys,
   };
 })();

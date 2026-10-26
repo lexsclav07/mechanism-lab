@@ -603,6 +603,50 @@
     ctx.restore();
   }
 
+  // ---------- keyboard controls ----------
+
+  // A key cap, centred on (x, y): filled in while it's held down.
+  function keyCap(ctx, x, y, text, down) {
+    ctx.font = `600 11px ${FONT_UI}`;
+    const w = Math.max(18, ctx.measureText(text).width + 10), h = 18, r = 3.5, x0 = x - w / 2, y0 = y - h / 2;
+    ctx.beginPath(); ctx.roundRect(x0, y0, w, h, r);
+    ctx.fillStyle = down ? C.ink : C.paper; ctx.fill();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = C.ink; ctx.stroke();
+    if (!down) { ctx.beginPath(); ctx.moveTo(x0 + r, y0 + h - 0.5); ctx.lineTo(x0 + w - r, y0 + h - 0.5); ctx.lineWidth = 2.4; ctx.stroke(); } // the key's lip
+    ctx.fillStyle = down ? C.paper : C.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(text, x, y + 0.5);
+    return w;
+  }
+
+  // The keys that drive each motor, piston or winch, drawn beside it (backwards / in first).
+  let keyRects = []; // where the key caps were drawn this frame, so they can be pressed
+  function drawKeys(ctx, scene) {
+    const K = ML.Controls;
+    keyRects = [];
+    if (!K) return;
+    const by = new Map();
+    for (const b of K.bindings(scene)) { if (!by.has(b.j)) by.set(b.j, []); by.get(b.j).push(b); }
+    for (const [j, list] of by) {
+      let x, y;
+      if (j.kind === 'pivot') { const p = ws(P.endWorld(scene, j.a)); [x, y] = [p[0], p[1] - 36]; }
+      else if (j.kind === 'pulley') { const c = ws(P.endWorld(scene, j.p)); [x, y] = [c[0], c[1] - j.r * View.ppm() - 22]; }
+      else { // a quarter of the way along it (its label sits in the middle)
+        const [s1, s2, nx, ny] = sides(scene, j, -1);
+        [x, y] = [s1[0] + (s2[0] - s1[0]) * 0.25 + nx * 26, s1[1] + (s2[1] - s1[1]) * 0.25 + ny * 26];
+      }
+      list.sort((a, b) => K.keyOrder(a.code) - K.keyOrder(b.code)); // as they sit on the keyboard
+      ctx.font = `600 11px ${FONT_UI}`;
+      const widths = list.map((b) => Math.max(18, ctx.measureText(K.label(b.code)).width + 10)), total = widths.reduce((a, w) => a + w, 0) + 4 * (list.length - 1);
+      let cx = x - total / 2;
+      list.forEach((b, i) => {
+        keyCap(ctx, cx + widths[i] / 2, y, K.label(b.code), K.held.has(b.code));
+        keyRects.push({ code: b.code, x0: cx - 2, y0: y - 12, x1: cx + widths[i] + 2, y1: y + 12 });
+        cx += widths[i] + 4;
+      });
+      placed.push([x - total / 2 - 2, y - 11, x + total / 2 + 2, y + 11]);
+    }
+  }
+
   // ---------- engineering mechanics overlays ----------
 
   // Force arrows for a free-body diagram or a support: each arrow points at the spot the force
@@ -793,6 +837,7 @@
     for (const j of scene.joints) if (j.kind === 'pivot' || j.kind === 'weld' || j.kind === 'slider') drawJointMark(ctx, scene, j);
     for (const j of scene.joints) if (j.kind === 'load' || j.kind === 'couple') drawLoad(ctx, scene, j);
     if (ui.opts.labels) drawLabels(ctx, scene);
+    drawKeys(ctx, scene); // after the labels so nothing covers them; the values then dodge them
     if (ui.opts.values) drawValues(ctx, scene, ui);
     if (ui.opts.reactions && ui.an && !ui.fbd) drawReactions(ctx, ui.an);
     if (ui.fbd && ui.an) drawFBD(ctx, ui.an, ui);
@@ -808,6 +853,7 @@
 
   ML.Render = {
     View, readColors, render, jointHandles, colors: () => C, FILLS,
+    keyAt: (sx, sy) => (keyRects.find((r) => sx >= r.x0 && sx <= r.x1 && sy >= r.y0 && sy <= r.y1) || {}).code || null,
     // primitives the editor reuses for tool previews
     bodyPath, drawBody, coil, pin, support, dot, label, ws, arrowTo, momentArc,
   };

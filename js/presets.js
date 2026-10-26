@@ -760,6 +760,66 @@
     return s;
   }
 
+  // ---------- machines you drive ----------
+  // The same machines with their motors, pistons and winches on keys (see controls.js). Let go
+  // of a key and a piston's valve shuts and a motor brakes, so everything holds where it is.
+
+  const keysOn = (j, out, inn, label) => Object.assign(j, { mode: 'keys', keyOut: out, keyIn: inn, label: label || j.label });
+
+  function driveExcavator() {
+    const s = excavator();
+    const [boom, stick, bucket] = s.joints.filter((j) => j.kind === 'piston');
+    keysOn(boom, 'KeyW', 'KeyS', 'boom'); keysOn(stick, 'KeyI', 'KeyK', 'stick'); keysOn(bucket, 'KeyL', 'KeyJ', 'bucket');
+    for (const j of [boom, stick, bucket]) j.speed *= 1.5; // a bit livelier by hand
+    return s;
+  }
+
+  function driveCrane() {
+    const s = towerCrane();
+    const ram = s.joints.find((j) => j.kind === 'piston'), cable = s.joints.find((j) => j.kind === 'rope');
+    keysOn(ram, 'KeyD', 'KeyA', 'trolley');
+    Object.assign(cable, { keyIn: 'KeyW', keyOut: 'KeyS', winch: 0.4, label: 'hoist' });
+    return s;
+  }
+
+  // A two-joint robot arm: a motor at the shoulder and one at the elbow, each on two keys.
+  // They brake when you let go, so the arm holds its pose with the 2 kg load in its hand.
+  function robotArm() {
+    const s = M.newScene();
+    const base = [0, 0.4], elbow = [0.9, -0.3], hand = [1.6, 0.1];
+    M.addBody(s, { kind: 'box', x: 0, y: 0.62, w: 0.7, h: 0.44, mass: 10, fixed: true }); // the base
+    const upper = rod(s, base, elbow, { ideal: false, mass: 3, label: 'L_1' });
+    const fore = rod(s, elbow, hand, { ideal: false, mass: 2, label: 'L_2' });
+    const load = M.addBody(s, { kind: 'disc', x: hand[0], y: hand[1], r: 0.1, mass: 2, color: 'ink', label: 'm', trace: true });
+    M.addJoint(s, { kind: 'pivot', a: on(s, upper, ...base), b: ground(...base), motor: 20, torque: 150, keyFwd: 'KeyA', keyRev: 'KeyD', idle: 'brake', label: 'shoulder' });
+    M.addJoint(s, { kind: 'pivot', a: on(s, fore, ...elbow), b: on(s, upper, ...elbow), motor: 25, torque: 80, keyFwd: 'KeyJ', keyRev: 'KeyL', idle: 'brake', label: 'elbow' });
+    M.addJoint(s, { kind: 'weld', a: on(s, fore, ...hand), b: on(s, load, ...hand), angle0: load.a - fore.a });
+    return s;
+  }
+
+  // A drawbridge (a bascule): the deck hinges at the bank and a winch rope over a pulley on the
+  // tower lifts its far end. Reel in to raise it, let out to lower it. Parts here don't touch,
+  // so the winch stops letting out when the deck is level (as if it sat on the far bank).
+  function drawbridge() {
+    const s = M.newScene();
+    const hinge = [-1.6, 0], tip = [1.6, 0], top = [-1.6, -3.6];
+    M.addBody(s, { kind: 'box', x: -2.2, y: 0.5, w: 1.3, h: 1.0, mass: 10, fixed: true }); // near bank
+    M.addBody(s, { kind: 'box', x: 2.35, y: 0.5, w: 1.3, h: 1.0, mass: 10, fixed: true });  // far bank
+    M.addBody(s, { kind: 'box', x: -2.05, y: -1.8, w: 0.3, h: 3.6, mass: 10, fixed: true }); // tower
+    const deck = M.addBody(s, { kind: 'box', x: 0, y: -0.06, w: 3.2, h: 0.12, mass: 200, label: 'M' });
+    M.addJoint(s, { kind: 'pivot', a: on(s, deck, ...hinge), b: ground(...hinge) });
+    const j = M.addJoint(s, { kind: 'pulley', a: on(s, deck, tip[0], -0.12), b: ground(-1.9, -3.1), p: ground(...top), r: 0.18, length: 0, keyIn: 'KeyW', keyOut: 'KeyS', winch: 0.5, label: 'winch' });
+    P.index(s); j.length = P.pulleyGeom(s, j).length;
+    // the drum's limits: the rope's length with the deck level, and with it raised to 75°
+    // (measured by posing the deck there, so the rope's wrap round the wheel counts too)
+    const keep = [deck.x, deck.y, deck.a], th = -75 * D;
+    [deck.x, deck.y, deck.a] = [hinge[0] + 1.6 * Math.cos(th), hinge[1] + 1.6 * Math.sin(th), th];
+    j.wind = 0; const raised = P.pulleyGeom(s, j).length;
+    [deck.x, deck.y, deck.a] = keep; j.wind = 0; P.pulleyGeom(s, j);
+    j.winchMax = j.length; j.winchMin = raised;
+    return s;
+  }
+
   ML.Presets = [
     { id: 'frame', name: 'The swinging frame', blurb: 'The mechanism from your video.', build: swingingFrame },
     { id: 'atwood', name: 'Atwood machine', blurb: 'Two masses on a pulley. The heavier one wins, slowly.', build: atwood },
@@ -791,6 +851,10 @@
     { id: 'quickreturn', group: 'Real machines', name: 'Quick-return shaper', blurb: 'Whitworth’s mechanism: the ram cuts slowly and comes back twice as fast. Watch its speed.', build: quickReturn },
     { id: 'strandbeest', group: 'Real machines', name: 'Strandbeest legs', blurb: "Theo Jansen's walking linkage. Watch the feet draw a flat-bottomed stride.", build: strandbeest },
     { id: 'trebuchet', group: 'Real machines', name: 'Trebuchet', blurb: 'A 400 kg counterweight whips a stone round on a sling. Check v_max.', build: trebuchet },
+    { id: 'drive-excavator', group: 'Drive it', name: 'Excavator', blurb: 'Dig with the keys: W / S boom, I / K stick, J / L bucket.', build: driveExcavator },
+    { id: 'drive-crane', group: 'Drive it', name: 'Tower crane', blurb: 'A / D runs the trolley, W / S winds the hoist. Try to stop the load swinging.', build: driveCrane },
+    { id: 'drive-arm', group: 'Drive it', name: 'Robot arm', blurb: 'Two motors with brakes: A / D for the shoulder, J / L for the elbow.', build: robotArm },
+    { id: 'drive-bridge', group: 'Drive it', name: 'Drawbridge', blurb: 'Hold W to winch the deck up, S to let it down.', build: drawbridge },
     { id: 'empty', name: 'Blank sheet', blurb: 'Start from nothing.', build: () => M.newScene() },
   ];
 })();

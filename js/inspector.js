@@ -86,7 +86,7 @@
   const liveBox = (...rows) => h('div', { class: 'live' }, h('h3', {}, 'Live'), ...rows);
   const note = (text) => h('p', { class: 'note' }, text);
   const running = () => A.S.running;
-  const fa = (j) => (j._avg ? j._avg.f : fa(j)); // averaged over the last frame
+  const fa = (j) => (j._avg ? j._avg.f : j._f || 0); // averaged over the last frame
   const ta = (j) => (j._avg ? j._avg.torque : j._torque || 0);
   const pushPull = (F) => (Math.abs(F) < 0.005 ? '0 N' : `${fmt(Math.abs(F), 1)} N ${F > 0 ? 'pull' : 'push'}`);
 
@@ -392,6 +392,70 @@
     return kids;
   }
 
+  // ---------- keyboard control ----------
+
+  const Ctl = () => ML.Controls;
+  // Free key pairs, tried in order when a part is first put on keys: [backwards/in, forwards/out].
+  const PAIRS = {
+    pivot: [['KeyA', 'KeyD'], ['ArrowLeft', 'ArrowRight'], ['KeyJ', 'KeyL'], ['KeyZ', 'KeyX'], ['KeyN', 'KeyM'], ['KeyF', 'KeyH']],
+    piston: [['KeyS', 'KeyW'], ['ArrowDown', 'ArrowUp'], ['KeyK', 'KeyI'], ['KeyG', 'KeyT'], ['KeyH', 'KeyY'], ['KeyB', 'KeyV']],
+    winch: [['KeyQ', 'KeyE'], ['KeyU', 'KeyO'], ['KeyC', 'KeyV'], ['Comma', 'Period']],
+  };
+  function freePair(j, kind) {
+    const used = new Set(Ctl().bindings(A.S.scene).filter((b) => b.j !== j).map((b) => b.code));
+    return PAIRS[kind].find((p) => !used.has(p[0]) && !used.has(p[1])) || PAIRS[kind][0];
+  }
+
+  // A key button: shows the bound key; tap it, then press the key you want.
+  function keyField(j, field, label) {
+    const C = Ctl(), code = j[field];
+    const cap = h('button', { type: 'button', class: 'keycap' + (code ? '' : ' none'), 'aria-label': `${label}: ${code ? C.label(code) : 'no key'}. Press to change.` }, code ? C.label(code) : 'none');
+    cap.addEventListener('click', () => {
+      cap.textContent = 'press a key…'; cap.classList.add('listening');
+      C.listen((got) => {
+        if (got) { A.checkpoint(); for (const k of ['keyFwd', 'keyRev', 'keyOut', 'keyIn']) if (k !== field && j[k] === got) j[k] = ''; j[field] = got; A.tweak(j); }
+        else { cap.textContent = code ? C.label(code) : 'none'; cap.classList.remove('listening'); }
+      }, (bad) => A.hint(`${bad === 'Space' ? 'Space stays Play / Pause' : C.label(bad) + ' can’t be used'}: pick another key.`, 3000));
+    });
+    const clear = code ? h('button', { type: 'button', class: 'ib small keyx', 'aria-label': `Remove the ${label.toLowerCase()} key`, onclick: () => { A.checkpoint(); j[field] = ''; A.tweak(j); } }, '×') : null;
+    const others = code ? A.S.scene.joints.filter((k) => k !== j && Ctl().bound(k).some((b) => b.code === code)) : [];
+    const warn = code && C.SHORTCUTS[code] ? `Takes over ${C.label(code)}’s shortcut (${C.SHORTCUTS[code]}).` : '';
+    const also = others.length ? `Also drives ${others.map((k) => (k.label ? k.label.replace('_', '') : M.kindName(k).toLowerCase())).join(', ')}.` : '';
+    return h('div', { class: 'keyrow' }, h('span', {}, label), h('span', { class: 'keyset' }, cap, clear),
+      warn || also ? h('small', {}, [warn, also].filter(Boolean).join(' ')) : null);
+  }
+
+  function motorKeys(j) {
+    const on = !!(j.keyFwd || j.keyRev);
+    const kids = [choice({ label: 'Runs', options: [['always', 'All the time'], ['keys', 'On keys']], get: () => (on ? 'keys' : 'always'),
+      set: (v) => { if (v === 'keys') { const [r, f] = freePair(j, 'pivot'); j.keyRev = r; j.keyFwd = f; } else { j.keyRev = j.keyFwd = ''; } } })];
+    if (on) {
+      kids.push(
+        keyField(j, 'keyFwd', 'Forwards'), keyField(j, 'keyRev', 'Backwards'),
+        choice({ label: 'Keys work', options: [['hold', 'While held'], ['toggle', 'Press on / off']], get: () => j.keyMode, set: (v) => { j.keyMode = v; j._latch = 0; } }),
+        choice({ label: 'When it stops', options: [['brake', 'Brake'], ['coast', 'Coast']], get: () => j.idle, set: (v) => (j.idle = v) }),
+        note(`The speed above is its top speed; it eases up to it. Brake holds it still (up to its max torque); coast lets it spin freely.`));
+    }
+    return h('div', { class: 'keys' }, h('h3', { class: 'sec' }, 'Keyboard'), ...kids);
+  }
+
+  function pistonKeys(j) {
+    if (j.mode !== 'keys') return null;
+    return h('div', { class: 'keys' }, h('h3', { class: 'sec' }, 'Keyboard'),
+      keyField(j, 'keyOut', 'Push out'), keyField(j, 'keyIn', 'Pull in'),
+      note('Let go and its valve shuts: it holds where it is, up to its max force.'));
+  }
+
+  function winchKeys(j) {
+    const on = !!(j.keyIn || j.keyOut);
+    const kids = [toggle({ id: 'i-winch', label: 'Winch on keys', get: () => on, set: (v) => { if (v) { const [i, o] = freePair(j, 'winch'); j.keyIn = i; j.keyOut = o; } else j.keyIn = j.keyOut = ''; } })];
+    if (on) {
+      kids.push(keyField(j, 'keyIn', 'Reel in'), keyField(j, 'keyOut', 'Let out'),
+        field({ id: 'i-winch-speed', label: 'Winch speed', unit: 'm/s', min: 0.02, max: 3, log: true, get: () => j.winch, set: (v) => (j.winch = Math.max(0.005, v)), ends: ['slow', 'fast'] }));
+    }
+    return h('div', { class: 'keys' }, h('h3', { class: 'sec' }, 'Keyboard'), ...kids);
+  }
+
   // ---------- joints ----------
 
   function jointCard(j) {
@@ -429,6 +493,7 @@
         field({ id: 'i-len', label: 'Length', unit: 'm', min: 0.05, max: 10, get: () => j.length, set: (v) => (j.length = Math.max(0.01, v)) }),
         liveBox(stat('Tension', () => (running() ? `${fmt(fa(j), 1)} N` : 'press Play')),
           stat('State', () => (len() < j.length - 1e-3 ? `slack by ${fmt((j.length - len()) * 100, 1)} cm` : 'tight'))),
+        winchKeys(j),
       ];
     }
     if (j.kind === 'pulley') {
@@ -436,6 +501,7 @@
         field({ id: 'i-len', label: 'Rope length', unit: 'm', min: 0.1, max: 20, get: () => j.length, set: (v) => (j.length = Math.max(0.05, v)), ends: ['hoist', 'lower'] }),
         field({ id: 'i-wr', label: 'Wheel radius', unit: 'm', min: 0.03, max: 1, get: () => j.r, set: (v) => (j.r = Math.max(0.01, v)) }),
         liveBox(stat('Rope tension', () => (running() ? `${fmt(fa(j), 1)} N` : 'press Play'))),
+        winchKeys(j),
       ];
     }
     if (j.kind === 'pivot') {
@@ -444,7 +510,8 @@
       if (j.motor) {
         kids.push(
           field({ id: 'i-rpm', label: 'Speed', unit: 'rpm', min: -300, max: 300, step: 1, get: () => j.motor, set: (v) => { j.motor = v || 0.01; j._lastRpm = j.motor; }, ends: ['backwards', 'forwards'] }),
-          field({ id: 'i-torque', label: 'Max torque', unit: 'N·m', min: 0.1, max: 10000, log: true, get: () => j.torque, set: (v) => (j.torque = Math.max(0, v)), ends: ['weak', 'strong'] }));
+          field({ id: 'i-torque', label: 'Max torque', unit: 'N·m', min: 0.1, max: 10000, log: true, get: () => j.torque, set: (v) => (j.torque = Math.max(0, v)), ends: ['weak', 'strong'] }),
+          motorKeys(j));
       }
       kids.push(liveBox(
         stat('Pin force', () => (running() ? `${fmt(Math.abs(fa(j)), 1)} N` : 'press Play')),
@@ -454,7 +521,9 @@
     }
     if (j.kind === 'piston') {
       return [
-        choice({ label: 'Does', options: [['cycle', 'In and out'], ['extend', 'Push out'], ['retract', 'Pull in']], get: () => j.mode, set: (v) => (j.mode = v) }),
+        choice({ label: 'Does', options: [['cycle', 'In and out'], ['extend', 'Push out'], ['retract', 'Pull in'], ['keys', 'Keys']], get: () => j.mode,
+          set: (v) => { j.mode = v; if (v === 'keys' && !j.keyOut && !j.keyIn) { const [i, o] = freePair(j, 'piston'); j.keyIn = i; j.keyOut = o; } } }),
+        pistonKeys(j),
         field({ id: 'i-speed', label: 'Speed', unit: 'm/s', min: 0.01, max: 5, log: true, get: () => j.speed, set: (v) => (j.speed = Math.max(0.001, v)), ends: ['slow', 'fast'] }),
         field({ id: 'i-force', label: 'Max force', unit: 'N', min: 1, max: 100000, log: true, get: () => j.force, set: (v) => (j.force = Math.max(0, v)), ends: ['weak', 'strong'] }),
         h('div', { class: 'pair' },
@@ -463,7 +532,7 @@
         liveBox(
           stat('Length', () => `${fmt(len())} m`),
           stat('Force', () => (running() ? pushPullfa(j) : 'press Play')),
-          stat('Going', () => (j.phase > 0 ? 'out' : 'in'))),
+          stat('Going', () => (j.mode === 'keys' ? ((j._cmd || 0) > 0.01 ? 'out' : (j._cmd || 0) < -0.01 ? 'in' : 'holding') : j.phase > 0 ? 'out' : 'in'))),
       ];
     }
     if (j.kind === 'weld') return [note('Holds two parts together as one solid piece. On one part, it’s a fixed support: it stops the part moving and turning.'), ...pinShared(j)];
@@ -510,6 +579,7 @@
 
   function refresh() {
     live = []; panels = [];
+    if (ML.Controls) ML.Controls.cancel(); // a key being bound is dropped when the card changes
     const it = A.S.selected;
     card.hidden = !it;
     if (!it) { card.replaceChildren(); return; }

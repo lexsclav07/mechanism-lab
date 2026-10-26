@@ -12,15 +12,19 @@
   // gscale scales a body's weight: 1 = normal, 0 = weightless, negative = floats up.
   // motor is in rpm (0 = just a pin) and torque is the motor's limit in N·m.
   // Pistons cycle between min and max length (m) at `speed` (m/s), with at most `force` (N).
+  // Keyboard control: keys are KeyboardEvent.code values ('KeyD', 'ArrowLeft'…), '' when unbound.
+  // A motor on keys runs while its key is held (keyMode 'hold') or is switched on and off by it
+  // ('toggle'); let go and it brakes or coasts (idle). A piston on keys has mode 'keys'. A rope
+  // or pulley rope can be a winch: keyIn reels it in, keyOut lets it out, at winch m/s.
   const JOINT_DEFAULTS = {
-    pivot: { motor: 0, torque: 50 },
+    pivot: { motor: 0, torque: 50, keyFwd: '', keyRev: '', keyMode: 'hold', idle: 'brake' },
     weld: { angle0: 0 },
     rod: { length: 1 },
-    rope: { length: 1 },
-    pulley: { length: 2, r: 0.15 },
+    rope: { length: 1, keyIn: '', keyOut: '', winch: 0.3 },
+    pulley: { length: 2, r: 0.15, keyIn: '', keyOut: '', winch: 0.3 },
     spring: { k: 50, c: 0.2, rest: 1, coils: 10 },
     damper: { c: 20 },
-    piston: { min: 0.5, max: 1.5, speed: 0.4, force: 400, mode: 'cycle', phase: 1 },
+    piston: { min: 0.5, max: 1.5, speed: 0.4, force: 400, mode: 'cycle', phase: 1, keyOut: '', keyIn: '' },
     slider: { dir: [1, 0], lock: true, angle0: 0, limits: true, lo: -1, hi: 1 },
     // loads, as in statics problems: angle in degrees anticlockwise from +x (-90 = down), M + anticlockwise
     load: { F: 100, angle: -90, follow: false },
