@@ -456,7 +456,7 @@
 
   function drawLabels(ctx, scene) {
     for (const b of scene.bodies) {
-      if (!b.label) continue;
+      if (!b.label || b.hideName) continue;
       if (b.kind === 'bar') {
         const s1 = ws(P.toWorld(b, -b.L / 2, 0)), s2 = ws(P.toWorld(b, b.L / 2, 0));
         let [nx, ny] = norm(-(s2[1] - s1[1]), s2[0] - s1[0]);
@@ -479,7 +479,7 @@
       placed.push(nameLabel(ctx, 'name:' + b.id, b.label, s[0] + 16, s[1] + 20, 'left', 16, s));
     }
     for (const j of scene.joints) {
-      if (!j.label || !DRAW[j.kind] || j.kind === 'pulley') continue;
+      if (!j.label || j.hideName || !DRAW[j.kind] || j.kind === 'pulley') continue;
       const [s1, s2, nx, ny] = sides(scene, j, -1);
       const off = j.kind === 'spring' || j.kind === 'damper' ? 21 : 13;
       // beside an upright part, the text runs outward from it instead of being centred on the offset
@@ -541,7 +541,7 @@
     const it = `italic 14px ${FONT_MATH}`, sm = `italic 10px ${FONT_MATH}`, rm = `14px ${FONT_MATH}`;
     ctx.font = it; const w1 = ctx.measureText(base).width;
     ctx.font = sm; const w2 = sub ? ctx.measureText(sub).width + 1 : 0;
-    ctx.font = rm; const rest = ` = ${value}`, w3 = ctx.measureText(rest).width;
+    ctx.font = rm; const rest = value == null ? '' : ` = ${value}`, w3 = ctx.measureText(rest).width; // no value: just the symbol
     const w = w1 + w2 + w3, hgt = 16;
     let x = Math.abs(nx) > 0.6 ? x0 + Math.sign(nx) * (w / 2 + 2) : x0, y;
     const at = lockedAt(key);
@@ -577,7 +577,7 @@
     // with lots of rods (a suspension, a truss) their forces only show on the one you point at
     const manyRods = bars.size + scene.joints.filter((j) => j.kind === 'rod').length > 4;
     for (const b of scene.bodies) {
-      if (b.kind !== 'bar' || !run || !show(b) || (manyRods && b !== ui.selected && b !== ui.hover)) continue;
+      if (b.kind !== 'bar' || b.hideValue || !run || !show(b) || (manyRods && !b.showValue && b !== ui.selected && b !== ui.hover)) continue;
       const F = P.barAxial(scene, b);
       if (F == null || Math.abs(F) < 0.05) continue;
       const s1 = ws(P.toWorld(b, -b.L / 2, 0)), s2 = ws(P.toWorld(b, b.L / 2, 0));
@@ -586,7 +586,7 @@
       note(ctx, 'F', `${num(F)} N`, (s1[0] + s2[0]) / 2 + nx * 14, (s1[1] + s2[1]) / 2 + ny * 14, C.ink, nx, 'F:' + b.id);
     }
     for (const j of scene.joints) {
-      if (!show(j)) continue;
+      if (!show(j) || j.hideValue) continue;
       if (j.kind === 'rod' && manyRods && j !== ui.selected && j !== ui.hover) continue;
       if (j.kind === 'pulley') {
         if (!run || !fa(j)) continue;
@@ -618,10 +618,11 @@
       const off = j.kind === 'spring' || j.kind === 'damper' ? 22 : j.kind === 'piston' ? 20 : 14;
       note(ctx, sym, `${num(F)} N`, (s1[0] + s2[0]) / 2 + nx * off, (s1[1] + s2[1]) / 2 + ny * off, C.ink, nx, 'F:' + j.id);
     }
-    for (const b of scene.bodies) { // speeds: weights, plus whatever is selected
-      if (b.fixed || !show(b) || (b.kind !== 'disc' && b !== ui.selected)) continue;
+    for (const b of scene.bodies) { // speeds: weights, anything set to show its speed, and the selected part
+      if (b.fixed || !show(b) || b.hideSpeed) continue;
+      if (!(b.kind === 'disc' || b.showSpeed || b === ui.selected)) continue;
       const v = Math.hypot(b.vx, b.vy);
-      if (v < 0.01 && b !== ui.selected) continue;
+      if (v < 0.01 && b !== ui.selected && !b.showSpeed) continue;
       const s = View.w2s(b.x, b.y), r = (b.kind === 'disc' ? b.r : Math.min(extent(b), 0.6)) * View.ppm();
       note(ctx, 'v', `${num(v)} m/s`, s[0], s[1] - r - 14, C.ink, 0, 'v:' + b.id);
     }
@@ -741,6 +742,7 @@
   // acts on, sized by how big it is next to the biggest one shown. With comp, each force is
   // drawn as its x and y parts (R_Ax, R_Ay) as you'd write them in a statics answer.
   function forceSet(ctx, list, comp, color) {
+    const nums = !cur || cur.opts.forceNums !== false, val = (t) => (nums ? t : null); // off: just the symbols
     const big = Math.max(1e-9, ...list.map((it) => Math.hypot(it.f[0], it.f[1])));
     const len = (F) => 22 + 48 * Math.min(1, Math.abs(F) / big);
     for (const it of list) {
@@ -750,15 +752,15 @@
         for (const [k, v, d] of [['x', it.f[0], [Math.sign(it.f[0]), 0]], ['y', -it.f[1], [0, Math.sign(it.f[1])]]]) {
           if (Math.abs(v) < big * 0.004) continue;
           const t = arrowTo(ctx, s, d, len(v), color, 1.8);
-          note(ctx, sub(it.sym, k), `${num(Math.abs(v))} N`, t[0] - d[0] * 6, t[1] - d[1] * 6 + (k === 'x' ? -10 : 0), color);
+          note(ctx, sub(it.sym, k), val(`${num(Math.abs(v))} N`), t[0] - d[0] * 6, t[1] - d[1] * 6 + (k === 'x' ? -10 : 0), color);
         }
       } else if (F > big * 0.004) {
         const d = [it.f[0] / F, it.f[1] / F], t = arrowTo(ctx, s, d, len(F), color, 1.8);
-        note(ctx, it.sym, `${num(F)} N`, t[0] - d[0] * 8, t[1] - d[1] * 8 - 4, color);
+        note(ctx, it.sym, val(`${num(F)} N`), t[0] - d[0] * 8, t[1] - d[1] * 8 - 4, color);
       }
       if (it.mz && Math.abs(it.mz) > 1e-6 && it.kind !== 'drag') {
         momentArc(ctx, s, 18, it.mz > 0, color, 1.6);
-        note(ctx, it.msym || it.sym, `${num(Math.abs(it.mz))} N·m`, s[0], s[1] + 34, color);
+        note(ctx, it.msym || it.sym, val(`${num(Math.abs(it.mz))} N·m`), s[0], s[1] + 34, color);
       }
     }
   }
@@ -805,7 +807,7 @@
       const s1 = ws(P.toWorld(b, -b.L / 2, 0)), s2 = ws(P.toWorld(b, b.L / 2, 0));
       let [nx, ny] = norm(-(s2[1] - s1[1]), s2[0] - s1[0]);
       if (ny < 0 || (ny === 0 && nx > 0)) { nx = -nx; ny = -ny; }
-      note(ctx, N > 0 ? 'T' : 'C', `${num(Math.abs(N))} N`, (s1[0] + s2[0]) / 2 + nx * 14, (s1[1] + s2[1]) / 2 + ny * 14, C.accent, nx, 'TC:' + b.id);
+      note(ctx, N > 0 ? 'T' : 'C', cur && cur.opts.forceNums === false ? null : `${num(Math.abs(N))} N`, (s1[0] + s2[0]) / 2 + nx * 14, (s1[1] + s2[1]) / 2 + ny * 14, C.accent, nx, 'TC:' + b.id);
     }
   }
 
@@ -927,7 +929,7 @@
     if (ui.opts.labels) drawLabels(ctx, scene);
     drawKeys(ctx, scene); // after the labels so nothing covers them; the values then dodge them
     if (ui.opts.values) drawValues(ctx, scene, ui);
-    if (ui.opts.reactions && ui.an && !ui.fbd) drawReactions(ctx, ui.an);
+    if (scene.settings.reactions && ui.an && !ui.fbd) drawReactions(ctx, ui.an);
     if (ui.fbd && ui.an) drawFBD(ctx, ui.an, ui);
     if (ui.probePt) drawProbe(ctx, ui.probePt);
     if (ui.hover && ui.hover !== ui.selected && !ui.fbd) highlight(ctx, scene, ui.hover, false);

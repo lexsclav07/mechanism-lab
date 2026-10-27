@@ -1,8 +1,8 @@
 // Physics checks: run the solver headless and compare against textbook answers.
 // Run with:  node tests/physics-checks.js   (no dependencies; exits 1 if anything fails)
 global.window = {};
-for (const f of ['physics', 'model', 'presets', 'forces', 'controls']) require(`../js/${f}.js`);
-const { Phys: P, Model: M, Presets, Forces: Fo, Controls: K } = window.ML;
+for (const f of ['physics', 'model', 'presets', 'forces', 'equations', 'controls']) require(`../js/${f}.js`);
+const { Phys: P, Model: M, Presets, Forces: Fo, Equations: Eq, Controls: K } = window.ML;
 
 let failed = 0;
 function check(name, got, want, tol) {
@@ -330,6 +330,31 @@ for (const pr of Presets) {
   }
   check(`preset "${pr.name}": ΣF = m·a, worst error (share of the biggest force)`, worstF, 0, 0.01);
   check(`preset "${pr.name}": ΣM = I·α, worst error`, worstM, 0, 0.01);
+}
+
+// The equations panel: its written-out terms, with the numbers put in, add up to the same sums
+// (ΣFx, ΣFy, ΣM about G) as the forces themselves, for every part of every example.
+for (const pr of Presets) {
+  const s = pr.build();
+  run(s, 1.5);
+  const r = Eq.build(s);
+  let worst = 0;
+  for (const p of r.parts) {
+    const scale = Math.max(1, p.b.mass * g, ...Fo.onBody(s, p.b).map((it) => Math.hypot(...it.f)));
+    worst = Math.max(worst, Math.abs(Eq.total(p.X) - p.bal.F[0]) / scale, Math.abs(Eq.total(p.Y) - p.bal.F[1]) / scale, Math.abs(Eq.total(p.Mz) - p.bal.M) / scale);
+  }
+  check(`preset "${pr.name}": equations panel adds up to ΣF and ΣM, worst error`, worst, 0, 1e-3); // arms under 0.1 mm are left out of the written sums
+}
+
+// The beam example is statically determinate: as many unknowns as equations, nothing accelerating.
+{
+  const pr = Presets.find((p) => /beam/i.test(p.name));
+  if (pr) {
+    const s = pr.build(); run(s, 0.5);
+    const r = Eq.build(s);
+    check(`"${pr.name}": unknown reactions minus equations`, r.unknowns - r.equations, 0, 0);
+    check(`"${pr.name}": text version names ΣFx`, Eq.toText(r).includes('ΣFx') ? 1 : 0, 1, 0);
+  }
 }
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');

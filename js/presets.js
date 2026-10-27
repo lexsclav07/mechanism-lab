@@ -266,6 +266,9 @@
   // Textbook problems: everything holds still, so the forces are the static answers. Members are
   // weightless (as the problems say), and the loads are the given P values. Weightless, but with
   // some mass: a 0.4 kg rod carrying kilonewtons makes the solver's in-between values chatter.
+  // statics examples start with their support reactions and rod forces showing (a setting of
+  // the build, in the ⋯ menu)
+  const staticsView = (s) => { s.settings.reactions = true; return s; };
   const member = (s, p1, p2, label = '', mass = 5) => rod(s, p1, p2, { ideal: false, gscale: 0, mass, label });
   const P_ = (s, b, p, F, angle = -90, label) => {
     const e = on(s, b, ...p);
@@ -866,10 +869,10 @@
     { id: 'peaucellier', group: 'Linkages', name: 'Peaucellier–Lipkin linkage', blurb: 'Eight rods that draw an exactly straight line, with no track.', build: peaucellier },
     { id: 'chebyshev', group: 'Linkages', name: 'Chebyshev lambda linkage', blurb: 'A four-bar whose foot draws a D with a nearly straight, steady flat side.', build: chebyshev },
     { id: 'pintograph', group: 'Linkages', name: 'Pintograph', blurb: 'A drawing toy: two cranks at different speeds steer a pen into a slowly turning pattern.', build: pintograph },
-    { id: 'beam', group: 'Statics', opts: { reactions: true }, name: 'Simply supported beam', blurb: 'A pin, a roller and a 1000 N load. Tap the beam for its shear and moment diagrams.', build: beam },
-    { id: 'bracket', group: 'Statics', opts: { reactions: true }, name: 'Wall bracket and cable', blurb: 'A beam held level by a cable. Find the cable tension and the reaction at the wall.', build: bracket },
-    { id: 'cantilever', group: 'Statics', opts: { reactions: true }, name: 'Cantilever', blurb: 'Glued into a wall, with a tip load and a couple. The wall pushes back with a moment too.', build: cantilever },
-    { id: 'truss', group: 'Statics', opts: { reactions: true }, name: 'Truss bridge', blurb: 'A Warren truss: every member in tension (T) or compression (C). Tap a pin to see the method of joints.', build: truss },
+    { id: 'beam', group: 'Statics', name: 'Simply supported beam', blurb: 'A pin, a roller and a 1000 N load. Tap the beam for its shear and moment diagrams.', build: () => staticsView(beam()) },
+    { id: 'bracket', group: 'Statics', name: 'Wall bracket and cable', blurb: 'A beam held level by a cable. Find the cable tension and the reaction at the wall.', build: () => staticsView(bracket()) },
+    { id: 'cantilever', group: 'Statics', name: 'Cantilever', blurb: 'Glued into a wall, with a tip load and a couple. The wall pushes back with a moment too.', build: () => staticsView(cantilever()) },
+    { id: 'truss', group: 'Statics', name: 'Truss bridge', blurb: 'A Warren truss: every member in tension (T) or compression (C). Tap a pin to see the method of joints.', build: () => staticsView(truss()) },
     { id: 'f1', group: 'Real machines', name: 'F1 front suspension', blurb: 'Double wishbones, pushrods and rockers on a shaker rig, like the ones F1 teams test on.', build: f1Suspension },
     { id: 'scissor', group: 'Real machines', name: 'Scissor lift', blurb: 'Rods crossed in X shapes and pinned, opened by a piston.', build: scissorLift },
     { id: 'pumpjack', group: 'Real machines', name: 'Oil pumpjack', blurb: 'The nodding donkey: a counterweighted crank rocks the beam and lifts the well rods.', build: pumpjack },

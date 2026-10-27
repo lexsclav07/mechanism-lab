@@ -75,7 +75,8 @@
       const what = gr.kind === 'slider' ? (ground ? (lock ? 'Track support' : 'Roller support') : 'Track')
         : ground ? (weld ? 'Fixed support' : 'Pinned support') : weld ? 'Glued joint' : 'Pin';
       items.push({ sym: 'R_' + L, msym: (weld || gr.kind === 'slider' ? 'M_' : motor ? 'τ_' : 'M_') + L, letter: L, kind: 'reaction', name: what + (withs.length ? ` with ${withs.join(', ')}` : ''),
-        p: gr.p, f: gr.f, mz: gr.mz, mG: gr.mG, ground, weld, motor });
+        p: gr.p, f: gr.f, mz: gr.mz, mG: gr.mG, ground, weld, motor,
+        roller: gr.kind === 'slider' && !lock ? gr.parts[0].j : null }); // a free track pushes only across itself
     });
     if (hand && hand.body === b.id) {
       const f = hand._avg || [hand._fx || 0, hand._fy || 0], p = P.toWorld(b, hand.x, hand.y);

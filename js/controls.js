@@ -11,7 +11,7 @@
   // Keys that keep their usual job and can't be bound.
   const RESERVED = new Set(['Space', 'Escape', 'Tab', 'Enter', 'NumpadEnter', 'MetaLeft', 'MetaRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'ShiftLeft', 'ShiftRight', 'CapsLock', 'ContextMenu']);
   // Keys with a shortcut that a binding takes over (said on the card, so it's no surprise).
-  const SHORTCUTS = { KeyR: 'reset', KeyS: 'slow motion', KeyF: 'fit to screen', Delete: 'delete', Backspace: 'delete', Equal: 'zoom in', Minus: 'zoom out' };
+  const SHORTCUTS = { KeyR: 'reset', KeyS: 'slow motion', KeyF: 'fit to screen', KeyE: 'equations', Delete: 'delete', Backspace: 'delete', Equal: 'zoom in', Minus: 'zoom out' };
   for (let i = 0; i <= 9; i++) SHORTCUTS['Digit' + i] = 'tool ' + i;
 
   // How a key looks on its key cap.

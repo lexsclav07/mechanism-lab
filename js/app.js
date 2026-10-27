@@ -15,7 +15,8 @@
     drag: null,      // the hand while running: { body, x, y (grabbed point), tx, ty (pointer), k, c }
     poseDrag: null,  // the same while paused (posing, no forces)
     hand: null, follow: null, followPt: null, // what the renderer draws for those
-    opts: { values: true, labels: true, grid: false, snapGrid: false, reactions: false, fbd: false, comp: true, lockLabels: false },
+    opts: { values: true, labels: true, grid: false, snapGrid: false, comp: true, lockLabels: false, forceNums: true, equations: false },
+    fbdFor: null,    // the part whose free-body diagram is on (see select)
     probe: null,     // the point last tapped on a part, in its own frame: { body, x, y }
     pairFrom: null,  // "Compare with another part": waiting for the second tap
     an: null,        // the scene the force read-outs come from (see analysis())
@@ -131,6 +132,7 @@
 
   function select(item) {
     S.selected = item; S.hover = null;
+    if (!item || item.id !== S.fbdFor) S.fbdFor = null; // a free-body diagram is for the part you asked, until you pick another
     if (!item || !M.isBody(item) || (S.probe && S.probe.body !== item.id)) S.probe = null;
     ML.Inspector.refresh();
   }
@@ -181,7 +183,6 @@
     S.selected = null; follow(null); ML.Editor.cancel();
     fitView(); changed();
     if (autoplay && S.scene.bodies.length) play();
-    if (pr.opts) { Object.assign(S.opts, pr.opts); saveOpts(); } // e.g. statics examples show their support reactions
     if (pr.id !== 'empty') hint((!pr.keysInBlurb && keysHint()) || pr.blurb, keysHint() ? 9000 : 5000);
   }
 
@@ -248,7 +249,7 @@
   // move are its static loads.
   let snapKey = null, snapScene = null;
   function analysis() {
-    const want = !!(S.selected || S.opts.reactions);
+    const want = !!(S.selected || S.scene.settings.reactions || S.opts.equations);
     S.scene._wantEnds = want;
     if (!want) return null;
     if (S.running) return S.scene;
@@ -311,7 +312,7 @@
     S.hand = hb ? { from: P.toWorld(hb, held.x, held.y), to: [held.tx, held.ty], F: S.drag ? S.drag._F || 0 : null } : null;
     S.freshTags = frameN++ % 6 === 0;
     if (S.freshTags || S.running) S.an = analysis();
-    S.fbd = S.opts.fbd && S.selected && M.isBody(S.selected) && S.an ? S.selected.id : null;
+    S.fbd = S.fbdFor != null && S.selected && S.selected.id === S.fbdFor && S.an ? S.fbdFor : null;
     const pb = S.probe && S.scene._byId.get(S.probe.body);
     S.probePt = pb ? P.toWorld(pb, S.probe.x, S.probe.y) : null;
     if (S.freshTags) {
@@ -321,7 +322,36 @@
       $('st-force').textContent = `${fmt(S.records.force)} N`;
     }
     R.render(ctx, S.scene, S);
+    if (S.opts.equations) drawEquations();
     requestAnimationFrame(frame);
+  }
+
+  // ---------- the equations drawer ----------
+
+  // Rebuilt about four times a second while running (often enough to follow the numbers,
+  // rarely enough to read them), and whenever the paused snapshot changes.
+  let eqFrom = null, eqAt = 0;
+  function drawEquations(force) {
+    const an = S.an;
+    if (!an || (!force && (S.running ? frameN - eqAt < 15 : an === eqFrom))) return;
+    eqFrom = an; eqAt = frameN;
+    const body = $('eqs-body'), top = body.scrollTop;
+    body.innerHTML = ML.Equations.toHTML(ML.Equations.build(an, an === S.scene ? S.drag : null));
+    body.scrollTop = top;
+  }
+
+  function showEquations(on) {
+    S.opts.equations = on; saveOpts();
+    $('eqs').hidden = !on;
+    $('eqs-btn').setAttribute('aria-pressed', String(on));
+    if (on) { S.an = analysis(); drawEquations(true); }
+  }
+
+  function copyEquations() {
+    const an = S.an || analysis();
+    if (!an) return;
+    const text = ML.Equations.toText(ML.Equations.build(an, an === S.scene ? S.drag : null));
+    navigator.clipboard.writeText(text).then(() => hint('Equations copied as text.', 2500), () => hint('Copying was blocked by the browser.', 3500));
   }
 
   // ---------- menus ----------
@@ -354,6 +384,14 @@
     return el('label', { class: 'switch', for: 'o-' + key }, el('span', {}, label), cb);
   }
 
+  // A switch for a setting of this build (saved with it), not a display option for every build.
+  function sceneSwitch(key, label) {
+    const cb = el('input', { type: 'checkbox', role: 'switch', id: 's-' + key });
+    cb.checked = !!S.scene.settings[key];
+    cb.addEventListener('change', () => { checkpoint(); S.scene.settings[key] = cb.checked; tweak(null); });
+    return el('label', { class: 'switch', for: 's-' + key }, el('span', {}, label), cb);
+  }
+
   function fillExamples(pop) {
     const items = [];
     let group = null;
@@ -383,7 +421,8 @@
     const item = (label, fn) => el('button', { type: 'button', class: 'tb', onclick: () => { closePops(); fn(); } }, label);
     pop.replaceChildren(
       optSwitch('values', 'Live values'), optSwitch('labels', 'Textbook labels'),
-      optSwitch('reactions', 'Support reactions and rod forces'),
+      sceneSwitch('reactions', 'Support reactions and rod forces'),
+      optSwitch('forceNums', 'Numbers on force arrows'),
       optSwitch('lockLabels', 'Lock labels in place', (on) => {
         if (on) { hint('Labels stay where they are now. Drag one to move it; drop it back by its part to let it follow again.', 6000); return; }
         S.scene.labelPos = {}; designLabels((d) => { for (const k of Object.keys(d)) delete d[k]; }); autosave();
@@ -479,6 +518,7 @@
     else if (k === 'r') reset();
     else if (k === 's') toggleSlowmo();
     else if (k === 'f') fitView();
+    else if (k === 'e') showEquations(!S.opts.equations);
     else if (e.key === 'Escape') { closePops(); select(null); setTool('select'); if (S.follow) follow(null); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && S.selected && S.selected.kind !== 'pair') {
       e.preventDefault(); checkpoint(); M.remove(S.scene, S.selected); select(null); changed();
@@ -501,6 +541,7 @@
     document.fonts && document.fonts.ready.then(() => R.readColors());
 
     try { Object.assign(S.opts, JSON.parse(store.get(OPTS) || '{}')); } catch { /* ignore */ }
+    delete S.opts.reactions; delete S.opts.fbd; // these used to be global switches; now they belong to a build / a part
     ML.Inspector.init(App, $('inspector'));
     ML.Rods.init(App);
     ML.Editor.init(App, canvas);
@@ -511,6 +552,9 @@
     $('reset').addEventListener('click', reset);
     $('slowmo').addEventListener('click', toggleSlowmo);
     $('follow-stop').addEventListener('click', () => follow(null));
+    $('eqs-btn').addEventListener('click', () => showEquations(!S.opts.equations));
+    $('eqs-close').addEventListener('click', () => showEquations(false));
+    $('eqs-copy').addEventListener('click', copyEquations);
     $('undo').addEventListener('click', undo);
     $('redo').addEventListener('click', redo);
     popover('examples-btn', 'examples-pop', fillExamples);
@@ -539,6 +583,7 @@
       loadPreset('frame');
       hint('This is the mechanism from your video. Grab any point to pull on it, or take parts from the tray and build your own.', 7000);
     }
+    if (S.opts.equations) showEquations(true);
     requestAnimationFrame(frame);
   }
 

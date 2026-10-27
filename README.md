@@ -69,6 +69,10 @@ don't jitter. Drag any label with the Grab tool to lock it where you put it (a d
 points back to its part); drop it back by its part to let it follow again. "Lock labels in place"
 in the ⋯ menu locks them all where they are; switching it off frees them all.
 
+Each part's card has an "On the drawing" section to switch its own labels on or off: its name,
+its value (a spring's force, a rod's T or C, a load's size…) and its speed. "Textbook labels" and
+"Live values" in the ⋯ menu switch them for everything at once.
+
 Tap a part to open its card, where every setting has a slider and a box for an exact value, plus
 live readouts. Space plays and pauses, R resets to where you last pressed Play, and Ctrl+Z / Ctrl+Y
 undo and redo. Builds save themselves in the browser, and "Save or load" in the ⋯ menu copies a
@@ -109,8 +113,10 @@ anticlockwise positive, SI units.
   (weight, each pin or support reaction R_A, R_B…, springs, ropes, pistons, loads, couples) with
   F_x, F_y and the moment of each. Moments can be taken about the centre of mass or any pin. The
   totals are checked against m·a and I·α, so you see "in equilibrium" for a structure and
-  Newton's second law for a moving part. Switch on the free-body diagram to see the part on its
-  own with every force drawn as an arrow, split into x and y parts if you like.
+  Newton's second law for a moving part. Switch on the free-body diagram to see that part on
+  its own with every force drawn as an arrow, split into x and y parts if you like, with or
+  without the numbers on the arrows. It's for the part you switched it on for, and goes away
+  when you pick something else.
 - **Internal forces.** For a rod or a block used as a beam, the Forces tab draws the axial force
   N, shear V and bending moment M along its length (hover for values). The point you tapped shows
   N, V and M at that cross-section.
@@ -121,7 +127,15 @@ anticlockwise positive, SI units.
 - **Two parts.** Shift-click a second part (or use "Compare with another part…") to see their
   angles, the angle between them, and the force one puts on the other.
 - **Statics view.** "Support reactions and rod forces" in the ⋯ menu labels every support
-  reaction and every rod's T or C on the drawing.
+  reaction and every rod's T or C on the drawing. It's saved with the build (the statics
+  examples have it on), so it doesn't follow you into other builds.
+- **Equations.** Σ Equations (or E) opens a drawer at the bottom with the whole drawing written
+  out to solve by hand: what's given, each component's law (W = m·g, F = k(L − L₀)…), and for
+  every part ΣF_x = m·a_x, ΣF_y = m·a_y and ΣM_G = I_G·α, first with symbols, then with the
+  numbers put in. Pins get one letter each across the drawing (A, B, C… left to right), so the
+  force a pin puts on one part shows up with the opposite sign on the other; a roller is one
+  unknown N square to its track. It ends with the count of equations against unknown reactions,
+  which tells you whether the structure is statically determinate. "Copy as text" copies it all.
 
 Paused, the forces are worked out for the pose on screen: the state at that instant, which for a
 structure that can't move is its static answer. Running, they're averaged over each frame, which
@@ -156,6 +170,7 @@ js/editor.js        the tools: placing parts, grabbing, snapping, camera follow
 js/inspector.js     the card for the tapped part
 js/controls.js      keyboard control: key bindings, held keys → motor, piston and winch commands
 js/forces.js        free-body diagrams, reactions, N/V/M inside members (engineering mechanics)
+js/equations.js     the whole drawing written out as equations (the Equations drawer)
 js/presets.js       example scenes
 js/app.js           state, loop, undo, menus, autosave
 tests/physics-checks.js   headless checks against textbook answers
@@ -173,4 +188,5 @@ grab hand, a rod pendulum's period, rod chains, a motor crank on a light rod, pi
 a part is deleted, that old saves move identically after conversion, statics answers (beam
 reactions and bending moments, a beam under its own weight, a cantilever, a truss by the method
 of joints), keyboard control (a piston drives and then holds, a winch lifts smoothly, motor
-brakes hold), ΣF = m·a and ΣM = I·α for every part of every example, and that every example runs for 10 seconds with its joints holding.
+brakes hold), ΣF = m·a and ΣM = I·α for every part of every example, that the Equations drawer's
+written-out sums add up to the same totals, and that every example runs for 10 seconds with its joints holding.

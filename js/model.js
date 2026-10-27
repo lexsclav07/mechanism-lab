@@ -34,7 +34,8 @@
   function newScene() {
     // substeps are per 1/60 s: 100 → the solver runs at 6000 Hz. More substeps = less
     // numerical energy loss (it shrinks in proportion to the step size).
-    return { version: 2, time: 0, nextId: 1, settings: { gravity: 9.81, air: 0.02, substeps: 100 }, bodies: [], joints: [] };
+    // reactions: show support reactions and rod forces on the drawing (the statics view)
+    return { version: 2, time: 0, nextId: 1, settings: { gravity: 9.81, air: 0.02, substeps: 100, reactions: false }, bodies: [], joints: [] };
   }
 
   // Rods are parts: a line of length L from local (-L/2, 0) to (+L/2, 0), 0.2 kg per metre.

@@ -220,8 +220,13 @@
     const S = A.S;
     const kids = [
       h('div', { class: 'stat' }, h('span', {}, 'Angle θ (from horizontal)'), (() => { const o = h('output', {}, ''); live.push([o, () => degs(Fo().bodyAngle(b))]); o.textContent = degs(Fo().bodyAngle(b)); return o; })()),
-      toggleOpt('fbd', 'Free-body diagram on the drawing'),
-      S.opts.fbd ? toggleOpt('comp', 'Split forces into x and y parts') : null,
+      (() => { // this part's free-body diagram: on until you pick another part
+        const cb = h('input', { type: 'checkbox', id: 'i-o-fbd', role: 'switch', checked: S.fbdFor === b.id });
+        cb.addEventListener('change', () => { S.fbdFor = cb.checked ? b.id : null; refresh(); });
+        return h('label', { class: 'switch', for: 'i-o-fbd' }, h('span', {}, 'Free-body diagram on the drawing'), cb);
+      })(),
+      S.fbdFor === b.id ? toggleOpt('comp', 'Split forces into x and y parts') : null,
+      S.fbdFor === b.id ? toggleOpt('forceNums', 'Numbers on the arrows') : null,
       forcesPanel(b),
       probePanel(b),
     ];
@@ -496,6 +501,27 @@
     return kids;
   }
 
+  // ---------- what a part shows on the drawing ----------
+
+  // Switches for this part's text on the drawing: its name (M₁, k…) and its live value (F = …,
+  // v = …). The ⋯ menu's "Textbook labels" and "Live values" still switch them all off at once.
+  const VALUE_NAMES = { spring: 'Force (F = …)', damper: 'Force (F = …)', piston: 'Force (F = …)', rod: 'Force (F = …)', rope: 'Tension (T = …)',
+    pulley: 'Tension (T = …)', load: 'Size (P = …)', couple: 'Size (C = …)', bar: 'Force along it (F = …)' };
+  function onDrawing(it) {
+    const kids = [];
+    const sw = (id, label, get, set) => toggle({ id, label, get, set });
+    if (it.label) kids.push(sw('i-show-name', 'Name label', () => !it.hideName, (v) => (it.hideName = !v)));
+    const valueName = it.kind === 'pivot' ? (it.motor ? 'Torque (τ = …)' : null) : VALUE_NAMES[it.kind];
+    if (valueName) kids.push(sw('i-show-value', valueName, () => !it.hideValue, (v) => { it.hideValue = !v; if (v && it.kind === 'bar') it.showValue = true; }));
+    if (M.isBody(it) && !it.fixed) {
+      const auto = it.kind === 'disc'; // weights show their speed unless told not to; other parts when selected
+      kids.push(sw('i-show-speed', 'Speed (v = …)', () => (auto ? !it.hideSpeed : !!it.showSpeed && !it.hideSpeed),
+        (v) => { if (auto) it.hideSpeed = !v; else { it.showSpeed = v; it.hideSpeed = !v; } }));
+    }
+    if (!kids.length) return null;
+    return h('div', { class: 'keys' }, h('h3', { class: 'sec' }, 'On the drawing'), ...kids);
+  }
+
   // ---------- keyboard control ----------
 
   const Ctl = () => ML.Controls;
@@ -583,14 +609,14 @@
       return [
         note('Resists the ends moving together or apart, in proportion to how fast they move. It never springs back.'),
         field({ id: 'i-c', label: 'Damping c', unit: 'N·s/m', min: 0.1, max: 10000, log: true, get: () => j.c, set: (v) => (j.c = Math.max(0, v)), ends: ['gentle', 'stiff as treacle'] }),
-        liveBox(stat('Force', () => (running() ? pushPullfa(j) : 'press Play')), stat('Length', () => `${fmt(len())} m`)),
+        liveBox(stat('Force', () => (running() ? pushPull(fa(j)) : 'press Play')), stat('Length', () => `${fmt(len())} m`)),
       ];
     }
     if (j.kind === 'rod') {
       return [
         note('A stiff, weightless link with a pin at each end.'),
         field({ id: 'i-len', label: 'Length', unit: 'm', min: 0.05, max: 10, get: () => j.length, set: (v) => (j.length = Math.max(0.01, v)) }),
-        liveBox(stat('Force', () => (running() ? pushPullfa(j) : 'press Play'))),
+        liveBox(stat('Force', () => (running() ? pushPull(fa(j)) : 'press Play'))),
       ];
     }
     if (j.kind === 'rope') {
@@ -637,7 +663,7 @@
           field({ id: 'i-max', label: 'Longest', unit: 'm', min: 0.05, max: 10, get: () => j.max, set: (v) => (j.max = Math.max(v, j.min)) })),
         liveBox(
           stat('Length', () => `${fmt(len())} m`),
-          stat('Force', () => (running() ? pushPullfa(j) : 'press Play')),
+          stat('Force', () => (running() ? pushPull(fa(j)) : 'press Play')),
           stat('Going', () => (j.mode === 'keys' ? ((j._cmd || 0) > 0.01 ? 'out' : (j._cmd || 0) < -0.01 ? 'in' : 'holding') : j.phase > 0 ? 'out' : 'in'))),
       ];
     }
@@ -711,7 +737,7 @@
     const tab = tabbed ? A.S.opts.tab || 'setup' : 'setup';
     const tabs = tabbed ? h('div', { class: 'seg tabs', role: 'group', 'aria-label': 'Show' }, ...[['setup', 'Setup'], ['forces', 'Forces']].map(([k, label]) =>
       h('button', { type: 'button', 'aria-pressed': String(tab === k), onclick: () => { A.S.opts.tab = k; A.saveOpts(); refresh(); } }, label))) : null;
-    const body = tab === 'forces' ? (isBody ? [studyBox(it)] : [...pinShared(it), pinPanel(it)]) : [...(isBody ? bodyCard(it) : jointCard(it)), remove];
+    const body = tab === 'forces' ? (isBody ? [studyBox(it)] : [...pinShared(it), pinPanel(it)]) : [...(isBody ? bodyCard(it) : jointCard(it)), onDrawing(it), remove];
     card.replaceChildren(head, ...(tabs ? [tabs] : []), ...body);
   }
 

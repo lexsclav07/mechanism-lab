@@ -174,6 +174,30 @@
   .btn.remove { justify-self: start; border-color: var(--rule); color: var(--ink-2); }
   .btn.remove:hover { color: var(--ink); border-color: var(--ink); }
 
+  /* the equations drawer */
+  .eqs { align-self: stretch; max-height: 36vh; display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+  .eqs-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--rule); }
+  .eqs-head h2 { margin: 0; font: italic 500 18px/1 var(--font-math); }
+  .eqs-head small { font-size: 11.5px; color: var(--ink-2); }
+  .eqs-head .grow { flex: 1; }
+  .eqs-head .btn { height: 28px; }
+  .eqs-head .ib { width: 30px; height: 30px; border: 0; background: transparent; display: grid; place-items: center; }
+  .eqs-body { overflow: auto; padding: 8px 12px 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 10px 22px; align-content: start; }
+  .eqs-body section { min-width: 0; display: grid; gap: 3px; align-content: start; }
+  .eqs-body h4 { margin: 0 0 2px; font: 600 11px var(--font-ui); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+  .eqs-body h4 i, .eqs-body h4 sub { text-transform: none; letter-spacing: 0; color: var(--ink); font-size: 13px; }
+  .eqs-body h4 small { font-weight: 400; letter-spacing: 0; text-transform: none; }
+  .eqs-body p { margin: 0; font-size: 12.5px; max-width: 70ch; }
+  .eq { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 10px; font: 14px/1.45 var(--font-math); }
+  .eq i { font-style: italic; }
+  .eq sub { font-size: .72em; }
+  .eq-r { margin-left: auto; white-space: nowrap; }
+  .eq-num { font: 12px/1.4 var(--font-num); font-variant-numeric: tabular-nums; color: var(--ink-2); padding-left: 1.2em; }
+  .eq + .eq:not(:has(.eq-num)) { margin-top: 3px; }
+  .eq-given { display: flex; flex-wrap: wrap; gap: 2px 14px; font: 13.5px var(--font-math); }
+  .sigma { font: 600 16px/1 var(--font-math); }
+  #eqs-btn[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+
   /* hint and parts tray */
   .toast { align-self: center; max-width: min(600px, 100%); box-sizing: border-box; padding: 7px 14px; border-radius: 3px; background: var(--ink); color: var(--paper); font-size: 13px; text-align: center; transition: opacity .3s; pointer-events: none; }
   .toast:empty { opacity: 0; }
@@ -210,6 +234,8 @@
     .inspector { width: 100%; max-height: 44vh; }
     .tool { width: 50px; height: 50px; }
     .tgroup > span { display: none; }
+    .eqs { max-height: 40vh; }
+    .eqs-head small { display: none; }
   }
   @media (max-width: 560px) {
     .title h1 { display: none; }
@@ -272,6 +298,9 @@
           <button class="tb" id="gravity-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="gravity-pop" title="Gravity">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v16M6 13l6 6 6-6"/></svg><i>g</i><span id="gravity-label">Earth</span>
           </button>
+          <button class="tb" id="eqs-btn" type="button" aria-pressed="false" aria-controls="eqs" title="Equations for the whole drawing (E)">
+            <span class="sigma" aria-hidden="true">Σ</span><span class="lbl">Equations</span>
+          </button>
           <button class="ib" id="menu-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="menu-pop" aria-label="More">
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
           </button>
@@ -287,6 +316,19 @@
     </div>
 
     <div class="toast" id="hint" role="status"></div>
+
+    <section class="eqs box" id="eqs" aria-labelledby="eqs-title" hidden>
+      <header class="eqs-head">
+        <h2 id="eqs-title">Equations</h2>
+        <small>x right, y up, moments anticlockwise + about each part’s centre of mass G</small>
+        <span class="grow"></span>
+        <button class="btn" id="eqs-copy" type="button">Copy as text</button>
+        <button class="ib" id="eqs-close" type="button" aria-label="Close equations">
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="eqs-body" id="eqs-body"></div>
+    </section>
 
     <nav class="tray box" aria-label="Parts">
       <div class="tgroup"><span>Move</span><div>
@@ -362,6 +404,7 @@
 <script src="js/render.js"></script>
 <script src="js/model.js"></script>
 <script src="js/forces.js"></script>
+<script src="js/equations.js"></script>
 <script src="js/rods.js"></script>
 <script src="js/controls.js"></script>
 <script src="js/editor.js"></script>
