@@ -289,6 +289,17 @@ const reactions = (s, b) => Fo.onBody(s, b).filter((it) => it.kind === 'reaction
   K.releaseAll();
 }
 
+// Circles: anchor points every 1/16 turn, on the rim, turning with the circle.
+{
+  const d = { kind: 'disc', x: 1, y: 2, a: 0.3, r: 0.5, anchors: 16, ring: 1 };
+  const pts = P.discAnchors(d);
+  const step = Math.atan2(pts[1][1] - 2, pts[1][0] - 1) - Math.atan2(pts[0][1] - 2, pts[0][0] - 1);
+  check('circle: number of anchor points', pts.length, 16, 0);
+  check('circle: anchor spacing (degrees)', (step * 180) / Math.PI, 22.5, 1e-9);
+  check('circle: anchors sit on the rim (m)', Math.max(...pts.map((q) => Math.abs(Math.hypot(q[0] - 1, q[1] - 2) - 0.5))), 0, 1e-12);
+  check('circle: first anchor turns with it (degrees)', (Math.atan2(pts[0][1] - 2, pts[0][0] - 1) * 180) / Math.PI, (0.3 * 180) / Math.PI, 1e-9);
+}
+
 // Every part of every example obeys ΣF = m·a and ΣM_G = I·α, using the frame-averaged forces.
 for (const pr of Presets) {
   const s = pr.build();

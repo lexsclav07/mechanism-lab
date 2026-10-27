@@ -157,7 +157,8 @@
 
   const KIND_NAMES = { box: 'Block', disc: 'Weight', poly: 'Shape', bar: 'Rod', pivot: 'Pin', weld: 'Glue', rod: 'Rod', rope: 'Rope',
     pulley: 'Pulley', spring: 'Spring', damper: 'Damper', piston: 'Piston', slider: 'Track', load: 'Load', couple: 'Moment' };
-  const kindName = (item) => (item.kind === 'pivot' && item.motor ? 'Motor' : KIND_NAMES[item.kind] || item.kind);
+  // a circle with anchor points (the Circle tool) reads as a circle, a plain one as a weight
+  const kindName = (item) => (item.kind === 'pivot' && item.motor ? 'Motor' : item.kind === 'disc' && item.anchors ? 'Circle' : KIND_NAMES[item.kind] || item.kind);
 
   // Textbook-style labels for new parts, like the figure: M for bodies, m for weights,
   // k for springs, c for dampers, L for rods, P for loads, C for couples. Ropes, pulleys and pistons go unlabelled.

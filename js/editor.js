@@ -18,6 +18,7 @@
     box: 'Drag on the board to draw a block, or tap for a standard one.',
     poly: 'Tap to place corners, then tap the first corner again (or double-tap) to finish the shape.',
     weight: 'Tap to drop a 1 kg weight. Drop it on something and it sticks to it.',
+    circle: 'Tap for a 0.5 m circle, or drag out its size. It has 16 anchor points round its rim (one every 1/16 turn) that pins, rods, springs and ropes snap to.',
     pivot: 'Tap where parts overlap (rods crossing, rod ends meeting) to pin them together. Tap a single part to pin it to the ground.',
     motor: 'Tap where two parts overlap (or on one part) to add a motor there. Set its speed and torque in its card.',
     weld: 'Tap where two parts overlap to glue them into one piece.',
@@ -79,7 +80,7 @@
     }).slice(0, 1));
     const parts = bodiesAt(V.s2w(sx, sy));
     // rods before other parts (they're thin and lie on top), except a weight you tap inside of
-    const w = V.s2w(sx, sy), inWeight = parts.filter((b) => b.kind === 'disc' && Math.hypot(w[0] - b.x, w[1] - b.y) < b.r);
+    const w = V.s2w(sx, sy), inWeight = parts.filter((b) => b.kind === 'disc' && b.color === 'ink' && Math.hypot(w[0] - b.x, w[1] - b.y) < b.r);
     out.push(...inWeight, ...parts.filter((b) => b.kind === 'bar'), ...parts.filter((b) => b.kind !== 'bar'));
     out.push(...pinHit.filter(hidden));
     out.push(...scene.joints.filter((j) => { if (j.kind !== 'slider') return false; const [e0, e1] = railEnds(scene, j); return segDist(s, R.ws(e0), R.ws(e1)) < 6; }));
@@ -125,6 +126,7 @@
     const ring = [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]];
     for (const b of scene.bodies) {
       consider([b.x, b.y]);
+      for (const q of P.discAnchors(b)) consider(q); // a circle's anchor points
       if (b.kind === 'box') {
         for (const [i, k] of ring) consider(P.toWorld(b, (i * b.w) / 2, (k * b.h) / 2));
         if (b.hollow) { const [wi, hi] = P.innerSize(b); for (const [i, k] of ring) consider(P.toWorld(b, (i * wi) / 2, (k * hi) / 2)); }
@@ -325,6 +327,31 @@
         if (host) M.addJoint(scene, { kind: 'weld', a: endOn(host, op.p0), b: { body: d.id, x: 0, y: 0 }, angle0: -host.a });
         A.select(d); A.changed();
         if (host) A.hint(`Stuck the weight onto ${host.label || 'the ' + M.kindName(host).toLowerCase()}. Drop one in empty space for a free weight.`);
+      },
+    },
+
+    // A circle with anchor points every 1/16 turn: tap for a 0.5 m one, or drag out its radius.
+    // Unlike a weight it doesn't stick to what it's dropped on: pin or motor its centre.
+    circle: {
+      down(sx, sy) { op = { p0: snap(sx, sy).p, s0: [sx, sy], r: 0.5 }; },
+      move(sx, sy) {
+        if (!op) return;
+        if (dist(op.s0, [sx, sy]) >= 6) op.r = Math.max(0.05, +dist(op.p0, V.s2w(sx, sy)).toFixed(2));
+        const c = R.ws(op.p0), rp = op.r * V.ppm();
+        setPreview((ctx) => {
+          ctx.beginPath(); ctx.arc(c[0], c[1], rp, 0, Math.PI * 2);
+          ctx.strokeStyle = R.colors().accent; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]);
+          for (let k = 0; k < 16; k++) { const t = (k * Math.PI) / 8; R.dot(ctx, [c[0] + rp * Math.cos(t), c[1] + rp * Math.sin(t)], 2, R.colors().accent); }
+          previewText(ctx, `r = ${op.r.toFixed(2)} m`, [c[0] + rp * 0.7, c[1] + rp * 0.7]);
+        });
+      },
+      up() {
+        if (!op) return;
+        const scene = A.S.scene;
+        A.checkpoint();
+        const d = M.addBody(scene, { kind: 'disc', x: op.p0[0], y: op.p0[1], r: op.r, mass: roundMass(Math.PI * op.r * op.r * 8), color: 'light', anchors: 16, ring: 1, label: M.autoLabel(scene, 'box') });
+        A.spawn(d); A.select(d); A.changed();
+        A.hint('Pin its centre so it can turn (or put a motor there). Its 16 rim points snap for pins, rods, springs and ropes.', 6000);
       },
     },
 
@@ -565,6 +592,7 @@
     if (A.S.running) A.pause();
     if (tool === 'box') { op = { p0: snap(sx, sy).p, s0: [sx, sy] }; op.p1 = op.p0; tools.box.up(sx, sy); }
     else if (tool === 'weight') { op = { p0: snap(sx, sy).p, s0: [sx, sy], r: 0.12 }; tools.weight.up(); }
+    else if (tool === 'circle') { op = { p0: snap(sx, sy).p, s0: [sx, sy], r: 0.5 }; tools.circle.up(); }
     else if (tool === 'pivot' || tool === 'weld' || tool === 'motor') tools[tool].up(sx, sy);
     op = null;
   }

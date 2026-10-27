@@ -48,7 +48,7 @@ python3 -m http.server 8000   # then open http://localhost:8000
 |--------|----------|--------------|
 | Move   | Grab     | Drag any point. Paused: sets the starting pose. Running: pulls with a spring "hand" and shows the force in newtons. Hatched ground anchors can be dragged even mid-swing. |
 |        | Follow   | Tap a point on a part and the camera tracks it. |
-| Bodies | Block, Weight, Shape | Rigid bodies. Weights dropped on a body stick to it. Any body's weight can be set positive or negative (negative floats up). |
+| Bodies | Block, Weight, Circle, Shape | Rigid bodies. A circle has anchor points every 1/16 turn round its rim (4, 8, 16 or 32 in its card, on the rim or a smaller ring) that pins, rods, springs and ropes snap to. Weights dropped on a body stick to it. Any body's weight can be set positive or negative (negative floats up). |
 | Joints | Pin, Motor, Glue, Track | Pin two parts together (or one to the ground), drive a pin with a motor (speed in rpm, max torque in N·m), glue parts rigidly, or let a block slide on a track. |
 | Links  | Rod, Rope, Pulley | A rod is a real part: join rods end to end, pin one anywhere along another, pin two where they cross, glue them into shapes, or put a motor on their joint. Rods weigh 0.2 kg/m by default, or switch on "Massless" for an ideal link. Also a rope that only pulls when tight, and a rope over a wheel. |
 | Forces | Spring, Damper, Piston, Load, Moment | Hooke's-law spring (k, damping, relaxed length); viscous damper (c); hydraulic piston (speed, max force, stroke); a point load P (size and angle, drag the way it pushes); a couple C (N·m). |

@@ -361,6 +361,22 @@
     return kids;
   }
 
+  // Resize a circle (radius r, anchor ring as a share of r) so things fixed on its anchor ring
+  // stay on their anchors and things on the rim stay on the rim; anything else keeps its place
+  // as a share of the radius.
+  function scaleDisc(b, r, ring) {
+    const oldR = b.r, oldRing = (b.ring ?? 1) * oldR;
+    for (const j of A.S.scene.joints) for (const k of ['a', 'b', 'p']) {
+      const e = j[k];
+      if (!e || e.body !== b.id) continue;
+      const d = Math.hypot(e.x, e.y);
+      if (d < 1e-9) continue;
+      const f = b.anchors && Math.abs(d - oldRing) < 1e-6 ? (ring * r) / d : Math.abs(d - oldR) < 1e-6 ? r / d : r / oldR;
+      e.x *= f; e.y *= f;
+    }
+    b.r = r; b.ring = ring;
+  }
+
   function bodyCard(b) {
     if (b.kind === 'bar') return barCard(b);
     const g = () => A.S.scene.settings.gravity;
@@ -376,7 +392,15 @@
         toS: (N) => (g() ? N / (b.mass * g()) : 1), fromS: (s) => s * b.mass * g(), ends: ['floats up', 'normal ×3'] }),
     ];
     if (g() === 0) kids.push(note('No gravity right now, so nothing weighs anything.'));
-    if (b.kind === 'disc') kids.push(field({ id: 'i-r', label: 'Radius', unit: 'm', min: 0.02, max: 2, get: () => b.r, set: (v) => (b.r = Math.max(0.01, v)) }));
+    if (b.kind === 'disc') {
+      kids.push(field({ id: 'i-r', label: 'Radius', unit: 'm', min: 0.02, max: 2, get: () => b.r, set: (v) => scaleDisc(b, Math.max(0.01, v), b.ring ?? 1), apply: 'change' }));
+      kids.push(choice({ label: 'Anchor points', options: [[0, 'None'], [4, '4'], [8, '8'], [16, '16'], [32, '32']], get: () => b.anchors || 0,
+        set: (v) => { b.anchors = v; if (v && b.ring == null) b.ring = 1; } }));
+      if (b.anchors) {
+        kids.push(field({ id: 'i-ring', label: 'Anchor ring', unit: '% of r', min: 10, max: 100, step: 1, get: () => Math.round((b.ring ?? 1) * 100), set: (v) => scaleDisc(b, b.r, Math.max(0.05, Math.min(1, v / 100))), apply: 'change' }),
+          note(`One every 1/${b.anchors} turn (${+(360 / b.anchors).toFixed(2)}°). Pins, rods, springs and ropes snap to them.`));
+      }
+    }
     if (b.kind === 'box') kids.push(toggle({ id: 'i-hollow', label: 'Hollow frame', get: () => b.hollow, set: (v) => { b.hollow = v; b.wall = Math.min(b.wall, Math.min(b.w, b.h) / 2 - 0.01); } }));
     kids.push(
       toggle({ id: 'i-fixed', label: 'Fixed in place', get: () => b.fixed, set: (v) => { b.fixed = v; b.vx = b.vy = b.av = 0; } }),

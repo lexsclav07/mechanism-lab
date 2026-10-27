@@ -194,6 +194,18 @@
       ctx.fillStyle = fillOf(b); ctx.fill('evenodd');
     }
     ctx.lineWidth = 1.6; ctx.strokeStyle = C.ink; ctx.lineJoin = 'round'; ctx.stroke();
+    if (b.anchors) anchorHoles(ctx, b);
+  }
+
+  // A circle's anchor points, drawn as small holes (left out when zoomed too far out to tell apart).
+  function anchorHoles(ctx, b) {
+    const pts = P.discAnchors(b).map(ws), k = View.ppm();
+    if ((2 * Math.PI * b.r * (b.ring ?? 1) * k) / pts.length < 7) return;
+    const hr = Math.min(2.6, Math.max(1.6, b.r * k * 0.05)), onRim = (b.ring ?? 1) > 0.97;
+    ctx.beginPath();
+    for (const s of pts) { ctx.moveTo(s[0] + hr, s[1]); ctx.arc(s[0], s[1], hr, 0, TAU); }
+    ctx.fillStyle = b.color === 'ink' ? C.paper : onRim ? C.ink : C.paper; ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = b.color === 'ink' ? C.paper : C.ink; ctx.stroke();
   }
 
   // Which way a ground symbol at world point p should face: away from what it holds.

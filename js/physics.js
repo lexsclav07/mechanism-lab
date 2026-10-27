@@ -212,6 +212,14 @@
     return b ? toWorld(b, e.x, e.y) : [e.x, e.y];
   }
 
+  // A circle's anchor points (world coords): b.anchors of them evenly round a ring at b.ring × its
+  // radius (1 = on the rim), the first at the part's own +x direction, so they turn with it.
+  function discAnchors(b) {
+    const n = b.kind === 'disc' ? b.anchors || 0 : 0, rr = b.r * (b.ring ?? 1), out = [];
+    for (let k = 0; k < n; k++) { const t = (k * 2 * Math.PI) / n; out.push(toWorld(b, rr * Math.cos(t), rr * Math.sin(t))); }
+    return out;
+  }
+
   // Is a world point on this body? tol (metres) counts points just outside the edge as hits,
   // so a joint snapped exactly onto an edge or corner still finds its body.
   function hitBody(b, wx, wy, tol = 0) {
@@ -862,7 +870,7 @@
 
   ML.Phys = {
     polyArea, polyCentroid, shapeArea, innerSize, updateMass, index,
-    toWorld, toLocal, rotate, bodyOf, angleOf, endWorld, hitBody, jointLength, pulleyGeom, barAxial, poseIdeal,
+    toWorld, toLocal, rotate, discAnchors, bodyOf, angleOf, endWorld, hitBody, jointLength, pulleyGeom, barAxial, poseIdeal,
     step, pose, energy, clusterMass, loadVector, endForces, onKeys,
   };
 })();

@@ -396,7 +396,7 @@
 
   // Tray buttons: a tap picks the tool; dragging a block, weight, pin or glue off the tray
   // drops one onto the board where you let go.
-  const DRAGGABLE = new Set(['box', 'weight', 'pivot', 'motor', 'weld']);
+  const DRAGGABLE = new Set(['box', 'weight', 'circle', 'pivot', 'motor', 'weld']);
   function wireTray() {
     let drag = null, justDragged = false;
     for (const btn of document.querySelectorAll('[data-tool]')) {
