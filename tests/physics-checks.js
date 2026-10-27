@@ -300,6 +300,22 @@ const reactions = (s, b) => Fo.onBody(s, b).filter((it) => it.kind === 'reaction
   check('circle: first anchor turns with it (degrees)', (Math.atan2(pts[0][1] - 2, pts[0][0] - 1) * 180) / Math.PI, (0.3 * 180) / Math.PI, 1e-9);
 }
 
+// CoreXY: each arrow key moves the head straight along x or y; motor A alone moves it at 45°.
+{
+  const key = (code) => ({ code, repeat: false, preventDefault() {} });
+  const fresh = () => { const s = M.load(M.serialize(Presets.find((p) => p.id === 'corexy').build())); P.index(s); return s; };
+  const drive = (s, t) => { for (let i = 0; i < t * 60; i++) { K.update(s, 1 / 60); P.step(s, 1 / 60); } };
+  const move = (codes, setup) => {
+    const s = fresh(); if (setup) setup(s); drive(s, 0.3);
+    const c = s.bodies.find((b) => b.label === 'M'), p0 = [c.x, -c.y];
+    for (const k of codes) K.down(key(k), s); drive(s, 0.8); K.releaseAll(); drive(s, 0.4);
+    return (Math.atan2(-c.y - p0[1], c.x - p0[0]) * 180) / Math.PI;
+  };
+  check('CoreXY: → moves the head along x (degrees)', move(['ArrowRight']), 0, 0.5);
+  check('CoreXY: ↑ moves the head along y (degrees)', move(['ArrowUp']), 90, 0.5);
+  check('CoreXY: motor A alone moves it on the diagonal (degrees)', move(['KeyQ'], (s) => Object.assign(s.joints.find((j) => j.label === 'motor A'), { keyFwd: 'KeyQ', keyRev: '' })), 45, 0.5);
+}
+
 // Every part of every example obeys ΣF = m·a and ΣM_G = I·α, using the frame-averaged forces.
 for (const pr of Presets) {
   const s = pr.build();

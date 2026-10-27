@@ -820,6 +820,35 @@
     return s;
   }
 
+  // CoreXY, as in many 3D printers and plotters, seen from above (so no gravity). The gantry
+  // slides up and down the frame, the head slides along the gantry, and both motors stay put on
+  // the frame. Belt A moves the head by x + y and belt B by x − y, so both motors turning the
+  // same way move it across, opposite ways move it up or down, and one motor alone moves it on
+  // a 45° diagonal. Each arrow key turns both motors the right way; the head draws its path.
+  function coreXY() {
+    const s = M.newScene();
+    s.settings.gravity = 0; s.settings.air = 0.5;
+    M.addBody(s, { kind: 'box', x: 0, y: 0, w: 2.1, h: 1.7, hollow: true, wall: 0.06, mass: 10, fixed: true }); // the frame
+    const pulley = (x, lab, fwd, rev) => {
+      const d = M.addBody(s, { kind: 'disc', x, y: -0.72, r: 0.05, mass: 0.2, color: 'dark', label: lab });
+      M.addJoint(s, { kind: 'pivot', a: { body: d.id, x: 0, y: 0 }, b: ground(x, -0.72), motor: 150, torque: 4, keyFwd: fwd, keyRev: rev, idle: 'brake', label: 'motor ' + lab });
+      return d;
+    };
+    const mA = pulley(-0.9, 'A', 'ArrowRight ArrowUp', 'ArrowLeft ArrowDown');
+    const mB = pulley(0.9, 'B', 'ArrowRight ArrowDown', 'ArrowLeft ArrowUp');
+    const gan = M.addBody(s, { kind: 'box', x: 0, y: 0.1, w: 1.8, h: 0.05, mass: 1, color: 'grey' });
+    const gy = M.addJoint(s, { kind: 'slider', a: ground(0, 0.1), b: { body: gan.id, x: 0, y: 0 }, dir: [0, 1], lock: true, limits: true, lo: -0.55, hi: 0.6 });
+    const car = M.addBody(s, { kind: 'box', x: 0, y: 0.1, w: 0.18, h: 0.14, mass: 0.4, color: 'dark', label: 'M', trace: true });
+    const cx = M.addJoint(s, { kind: 'slider', a: on(s, gan, 0, 0.1), b: { body: car.id, x: 0, y: 0 }, dir: [1, 0], lock: true, limits: true, lo: -0.78, hi: 0.78 });
+    const at = (b, x, y, idler) => ({ body: b ? b.id : null, x, y, idler });
+    // belt A: x + y (y up); belt B: x − y. (A positive motor turns its pulley anticlockwise.)
+    M.addJoint(s, { kind: 'belt', a: { body: mA.id, x: 0, y: 0 }, b: { body: car.id, x: 0, y: 0 }, sx: cx.id, sy: gy.id, cx: 1, cy: -1, r: 0.05, c0: 0,
+      path: [at(car, -0.09, -0.02), at(gan, -0.85, -0.02, true), at(mA, 0, 0), at(null, 0.97, -0.76, true), at(gan, 0.85, -0.02, true), at(car, 0.09, -0.02)] });
+    M.addJoint(s, { kind: 'belt', a: { body: mB.id, x: 0, y: 0 }, b: { body: car.id, x: 0, y: 0 }, sx: cx.id, sy: gy.id, cx: 1, cy: 1, r: 0.05, c0: 0, dashed: true,
+      path: [at(car, 0.09, 0.02), at(gan, 0.85, 0.02, true), at(mB, 0, 0), at(null, -0.97, -0.76, true), at(gan, -0.85, 0.02, true), at(car, -0.09, 0.02)] });
+    return s;
+  }
+
   ML.Presets = [
     { id: 'frame', name: 'The swinging frame', blurb: 'The mechanism from your video.', build: swingingFrame },
     { id: 'atwood', name: 'Atwood machine', blurb: 'Two masses on a pulley. The heavier one wins, slowly.', build: atwood },
@@ -854,6 +883,7 @@
     { id: 'drive-excavator', group: 'Drive it', name: 'Excavator', blurb: 'Dig with the keys: W / S boom, I / K stick, J / L bucket.', build: driveExcavator },
     { id: 'drive-crane', group: 'Drive it', name: 'Tower crane', blurb: 'A / D runs the trolley, W / S winds the hoist. Try to stop the load swinging.', build: driveCrane },
     { id: 'drive-arm', group: 'Drive it', name: 'Robot arm', blurb: 'Two motors with brakes: A / D for the shoulder, J / L for the elbow.', build: robotArm },
+    { id: 'corexy', group: 'Drive it', keysInBlurb: true, name: 'CoreXY', blurb: 'Two fixed motors, two crossed belts, seen from above. The arrow keys move the head (each turns both motors); the head draws its path.', build: coreXY },
     { id: 'drive-bridge', group: 'Drive it', name: 'Drawbridge', blurb: 'Hold W to winch the deck up, S to let it down.', build: drawbridge },
     { id: 'empty', name: 'Blank sheet', blurb: 'Start from nothing.', build: () => M.newScene() },
   ];

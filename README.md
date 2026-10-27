@@ -58,6 +58,17 @@ body joins the new rod there. A loose end next to a body is pinned to the ground
 overlapping spot again picks the next part underneath. A pin's card shows how many parts share it
 and has a "Fixed to the ground" switch.
 
+**Exact sizes.** Every part's card has its angle θ (degrees, anticlockwise from horizontal).
+Blocks have width and height. Shapes list their sides (AB, BC…) and corner angles (∠B, ∠C…) to
+type in exactly: the last side and the angles at its two ends close the shape. While a shape is
+selected its corners are lettered on the drawing, and while you draw one the Shape tool shows
+each side's length and angle.
+
+**Labels.** Labels and values hold their place and update about ten times a second, so they
+don't jitter. Drag any label with the Grab tool to lock it where you put it (a dotted leader
+points back to its part); drop it back by its part to let it follow again. "Lock labels in place"
+in the ⋯ menu locks them all where they are; switching it off frees them all.
+
 Tap a part to open its card, where every setting has a slider and a box for an exact value, plus
 live readouts. Space plays and pauses, R resets to where you last pressed Play, and Ctrl+Z / Ctrl+Y
 undo and redo. Builds save themselves in the browser, and "Save or load" in the ⋯ menu copies a
@@ -80,7 +91,9 @@ key takes over that key's shortcut, and the card says when it does. One key can 
 parts at once, like both wheels of a cart. Pressing a bound key while paused starts the machine.
 The keys are drawn beside each part, light up while held, and can be pressed with a mouse or a
 finger too (on a phone or tablet). The "Drive it" examples are ready to go: an excavator, a tower
-crane, a robot arm and a drawbridge.
+crane, a robot arm, a drawbridge, and a CoreXY machine (two fixed motors and two crossed belts,
+as in many 3D printers: each arrow key turns both motors, and one motor alone moves the head
+diagonally).
 
 ## Studying engineering mechanics with it
 

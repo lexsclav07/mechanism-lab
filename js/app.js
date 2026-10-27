@@ -15,7 +15,7 @@
     drag: null,      // the hand while running: { body, x, y (grabbed point), tx, ty (pointer), k, c }
     poseDrag: null,  // the same while paused (posing, no forces)
     hand: null, follow: null, followPt: null, // what the renderer draws for those
-    opts: { values: true, labels: true, grid: false, snapGrid: false, reactions: false, fbd: false, comp: true },
+    opts: { values: true, labels: true, grid: false, snapGrid: false, reactions: false, fbd: false, comp: true, lockLabels: false },
     probe: null,     // the point last tapped on a part, in its own frame: { body, x, y }
     pairFrom: null,  // "Compare with another part": waiting for the second tap
     an: null,        // the scene the force read-outs come from (see analysis())
@@ -69,6 +69,26 @@
   }
 
   const touched = () => { S.dirty = true; };
+
+  // Locked labels: scene.labelPos[key] = a fixed world point for that label (see render.js).
+  // They're kept in the start state too, so Reset doesn't undo where you put them.
+  function designLabels(fn) {
+    if (!S.design || S.dirty) return;
+    const d = JSON.parse(S.design); d.labelPos = d.labelPos || {}; fn(d.labelPos); S.design = M.serialize(d);
+  }
+  function setLabelPos(key, pos, commit = true) {
+    const lp = S.scene.labelPos || (S.scene.labelPos = {});
+    if (pos) lp[key] = pos; else delete lp[key];
+    if (commit) { designLabels((d) => { if (pos) d[key] = pos; else delete d[key]; }); autosave(); }
+  }
+  // "Lock labels in place": the renderer locks each label where it first draws it.
+  const pending = new Map();
+  S.lockLabel = (key, pos) => {
+    const lp = S.scene.labelPos || (S.scene.labelPos = {});
+    if (lp[key]) return;
+    lp[key] = pos; pending.set(key, pos);
+    if (pending.size === 1) setTimeout(() => { designLabels((d) => { for (const [k, v] of pending) d[k] = v; }); pending.clear(); autosave(); }, 0);
+  };
 
   // Camera follow: target = { body, x, y } (a point in that body's own frame), or null.
   function follow(target) {
@@ -162,7 +182,7 @@
     fitView(); changed();
     if (autoplay && S.scene.bodies.length) play();
     if (pr.opts) { Object.assign(S.opts, pr.opts); saveOpts(); } // e.g. statics examples show their support reactions
-    if (pr.id !== 'empty') hint(keysHint() || pr.blurb, keysHint() ? 9000 : 5000);
+    if (pr.id !== 'empty') hint((!pr.keysInBlurb && keysHint()) || pr.blurb, keysHint() ? 9000 : 5000);
   }
 
   // "Keys: A / D motor, W / S piston P_1" for a build that's driven from the keyboard.
@@ -327,10 +347,10 @@
     return e;
   };
 
-  function optSwitch(key, label) {
+  function optSwitch(key, label, after) {
     const cb = el('input', { type: 'checkbox', role: 'switch', id: 'o-' + key });
     cb.checked = !!S.opts[key];
-    cb.addEventListener('change', () => { S.opts[key] = cb.checked; saveOpts(); });
+    cb.addEventListener('change', () => { S.opts[key] = cb.checked; saveOpts(); if (after) after(cb.checked); });
     return el('label', { class: 'switch', for: 'o-' + key }, el('span', {}, label), cb);
   }
 
@@ -364,6 +384,11 @@
     pop.replaceChildren(
       optSwitch('values', 'Live values'), optSwitch('labels', 'Textbook labels'),
       optSwitch('reactions', 'Support reactions and rod forces'),
+      optSwitch('lockLabels', 'Lock labels in place', (on) => {
+        if (on) { hint('Labels stay where they are now. Drag one to move it; drop it back by its part to let it follow again.', 6000); return; }
+        S.scene.labelPos = {}; designLabels((d) => { for (const k of Object.keys(d)) delete d[k]; }); autosave();
+        hint('Labels follow their parts again.', 3000);
+      }),
       optSwitch('grid', 'Grid'), optSwitch('snapGrid', 'Snap to grid'),
       el('hr', {}),
       item('Fit everything on screen', fitView),
@@ -517,7 +542,7 @@
     requestAnimationFrame(frame);
   }
 
-  const App = { S, checkpoint, changed, tweak, touched, spawn, select, pause, play, hint, saveOpts, follow, analysis: () => S.an, keysHint };
+  const App = { S, checkpoint, changed, tweak, touched, spawn, select, pause, play, hint, saveOpts, follow, analysis: () => S.an, keysHint, setLabelPos };
   ML.App = App;
 
   // Keep the build across live updates of this page.

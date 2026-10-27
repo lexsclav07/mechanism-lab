@@ -43,7 +43,8 @@
   function bound(j) {
     if (j.kind === 'piston' && j.mode !== 'keys') return [];
     if (j.kind === 'pivot' && !j.motor) return [];
-    return (FIELDS[j.kind] || []).filter(([f]) => j[f]).map(([f, role]) => ({ j, code: j[f], role }));
+    // a role can have several keys, space-separated ('ArrowRight ArrowUp'): any of them works
+    return (FIELDS[j.kind] || []).flatMap(([f, role]) => (j[f] || '').split(' ').filter(Boolean).map((code) => ({ j, code, role })));
   }
   const bindings = (scene) => scene.joints.flatMap(bound);
   const isBound = (scene, code) => scene.joints.some((j) => bound(j).some((b) => b.code === code));

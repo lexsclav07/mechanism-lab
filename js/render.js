@@ -419,10 +419,40 @@
     return [s[0] - (fx / F) * LOAD_LEN, s[1] - (fy / F) * LOAD_LEN];
   };
 
-  const DRAW = { spring: drawSpring, damper: drawDamper, rod: drawRod, rope: drawRope, piston: drawPiston, pulley: drawPulley };
+  // A belt's route (j.path: points on parts or the frame), with its idler pulleys as small wheels.
+  // A second belt that runs at another height is dashed, as hidden lines are in a drawing.
+  function drawBelt(ctx, scene, j) {
+    const pts = (j.path || []).map((e) => ({ s: ws(P.endWorld(scene, e)), idler: e.idler }));
+    if (pts.length < 2) return;
+    ctx.save(); if (j.dashed) ctx.setLineDash([7, 4]);
+    ctx.beginPath(); pts.forEach(({ s }, i) => (i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1])));
+    ctx.lineWidth = 1.6; ctx.lineJoin = 'round'; ctx.strokeStyle = C.ink; ctx.stroke(); ctx.restore();
+    for (const { s, idler } of pts) {
+      if (!idler) continue;
+      ctx.beginPath(); ctx.arc(s[0], s[1], 4.5, 0, TAU); ctx.fillStyle = C.paper; ctx.fill(); ctx.lineWidth = 1.2; ctx.strokeStyle = C.ink; ctx.stroke();
+      dot(ctx, s, 1.3);
+    }
+  }
+
+  const DRAW = { belt: drawBelt, spring: drawSpring, damper: drawDamper, rod: drawRod, rope: drawRope, piston: drawPiston, pulley: drawPulley };
   let anchorsDrawn = new Set();
 
   // ---------- labels and live values ----------
+
+  // A part's name label (M_f, k…), lockable like the values. anchor: the spot it names.
+  function nameLabel(ctx, key, text, x, y, align, size, anchor) {
+    const at = lockedAt(key);
+    if (at) {
+      const [cx, cy] = ws(at), rect = label(ctx, text, cx, cy, 'center', size);
+      leader(ctx, rect, anchor || [x, y]);
+      hits.push({ key, rect, center: [cx, cy], natural: anchor || [x, y] });
+      return rect;
+    }
+    const rect = label(ctx, text, x, y, align, size);
+    hits.push({ key, rect, center: [(rect[0] + rect[2]) / 2, y], natural: anchor || [x, y] });
+    autoLock(key, (rect[0] + rect[2]) / 2, y);
+    return rect;
+  }
 
   function drawLabels(ctx, scene) {
     for (const b of scene.bodies) {
@@ -432,7 +462,8 @@
         let [nx, ny] = norm(-(s2[1] - s1[1]), s2[0] - s1[0]);
         if (ny > 0 || (ny === 0 && nx > 0)) { nx = -nx; ny = -ny; }
         const align = Math.abs(nx) > 0.6 ? (nx < 0 ? 'right' : 'left') : 'center';
-        placed.push(label(ctx, b.label, (s1[0] + s2[0]) / 2 + nx * 13, (s1[1] + s2[1]) / 2 + ny * 13, align, 15));
+        const mid = [(s1[0] + s2[0]) / 2, (s1[1] + s2[1]) / 2];
+        placed.push(nameLabel(ctx, 'name:' + b.id, b.label, mid[0] + nx * 13, mid[1] + ny * 13, align, 15, mid));
         continue;
       }
       // leader line from the lower-right of the outline, like the M_f callout in the figure
@@ -444,9 +475,8 @@
         lp = pts.map(([x, y]) => P.toWorld(b, x, y)).reduce((m, q) => (q[0] + q[1] > m[0] + m[1] ? q : m));
       }
       const s = ws(lp);
-      ctx.beginPath(); ctx.moveTo(s[0], s[1]); ctx.lineTo(s[0] + 14, s[1] + 14);
-      ctx.lineWidth = 0.9; ctx.strokeStyle = C.ink; ctx.stroke();
-      placed.push(label(ctx, b.label, s[0] + 16, s[1] + 20));
+      if (!lockedAt('name:' + b.id)) { ctx.beginPath(); ctx.moveTo(s[0], s[1]); ctx.lineTo(s[0] + 14, s[1] + 14); ctx.lineWidth = 0.9; ctx.strokeStyle = C.ink; ctx.stroke(); }
+      placed.push(nameLabel(ctx, 'name:' + b.id, b.label, s[0] + 16, s[1] + 20, 'left', 16, s));
     }
     for (const j of scene.joints) {
       if (!j.label || !DRAW[j.kind] || j.kind === 'pulley') continue;
@@ -454,7 +484,8 @@
       const off = j.kind === 'spring' || j.kind === 'damper' ? 21 : 13;
       // beside an upright part, the text runs outward from it instead of being centred on the offset
       const align = Math.abs(nx) > 0.6 ? (nx < 0 ? 'right' : 'left') : 'center';
-      placed.push(label(ctx, j.label, (s1[0] + s2[0]) / 2 + nx * off, (s1[1] + s2[1]) / 2 + ny * off, align, 15));
+      const mid = [(s1[0] + s2[0]) / 2, (s1[1] + s2[1]) / 2];
+      placed.push(nameLabel(ctx, 'name:' + j.id, j.label, mid[0] + nx * off, mid[1] + ny * off, align, 15, mid));
     }
   }
 
@@ -475,21 +506,58 @@
     return (v < 0 && +t !== 0 ? '−' : '') + t;
   };
 
+  // ---------- steady, lockable labels ----------
+  // Every label and value has a key (like 'F:12' for joint 12's force). That lets a label keep
+  // its spot from one frame to the next instead of hopping about, update its number only about
+  // ten times a second, and be locked in place: scene.labelPos[key] is a fixed world point for
+  // it (set by dragging it, or by "Lock labels in place"). A locked label away from its part
+  // gets a thin leader line back to it.
+  let cur = null;           // the ui being drawn (set in render)
+  const memo = new Map();   // key → { slot, text }: what a label did last frame
+  let hits = [];            // labels drawn this frame, for picking them up: { key, rect, center, natural }
+  const remembered = (key) => { let m = memo.get(key); if (!m) memo.set(key, (m = {})); return m; };
+  const lockedAt = (key) => (key && cur && cur.scene.labelPos ? cur.scene.labelPos[key] : null);
+
+  // Thin leader from a locked label (rect) back to the spot it describes.
+  function leader(ctx, rect, to) {
+    const x = Math.max(rect[0], Math.min(rect[2], to[0])), y = Math.max(rect[1], Math.min(rect[3], to[1]));
+    if (Math.hypot(x - to[0], y - to[1]) < 22) return;
+    ctx.save(); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(to[0], to[1]);
+    ctx.setLineDash([3, 3]); ctx.lineWidth = 0.9; ctx.strokeStyle = C.muted; ctx.stroke(); ctx.restore();
+    dot(ctx, to, 1.8, C.muted);
+  }
+
+  // Lock a label where it is now (when "Lock labels in place" is on and it isn't locked yet).
+  function autoLock(key, sx, sy) { if (key && cur && cur.opts.lockLabels && cur.lockLabel) cur.lockLabel(key, View.s2w(sx, sy)); }
+
   // A live value written like the figure's annotations: "F = 12.4 N", the symbol in italics.
-  // Values dodge labels and values already placed this frame (up, then down); with no room
-  // they're skipped. nx: beside an upright part (|nx| large) the text runs outward from x.
+  // Values dodge labels and values already placed this frame (up, then down, preferring the spot
+  // they had last frame); with no room they're skipped. nx: beside an upright part (|nx| large)
+  // the text runs outward from x. key: see above (optional).
   let placed = [];
-  function note(ctx, sym, value, x0, y0, color = C.ink, nx = 0) {
+  function note(ctx, sym, value, x0, y0, color = C.ink, nx = 0, key = null) {
+    if (key) { const m = remembered(key); if (m.text == null || !cur || cur.freshTags || !cur.running) m.text = value; value = m.text; }
     const i = sym.indexOf('_'), base = i < 0 ? sym : sym.slice(0, i), sub = i < 0 ? '' : sym.slice(i + 1);
     const it = `italic 14px ${FONT_MATH}`, sm = `italic 10px ${FONT_MATH}`, rm = `14px ${FONT_MATH}`;
     ctx.font = it; const w1 = ctx.measureText(base).width;
     ctx.font = sm; const w2 = sub ? ctx.measureText(sub).width + 1 : 0;
     ctx.font = rm; const rest = ` = ${value}`, w3 = ctx.measureText(rest).width;
-    const w = w1 + w2 + w3, hgt = 16, x = Math.abs(nx) > 0.6 ? x0 + Math.sign(nx) * (w / 2 + 2) : x0;
-    const free = (y) => placed.every((r) => x + w / 2 + 3 < r[0] || x - w / 2 - 3 > r[2] || y + hgt / 2 < r[1] || y - hgt / 2 > r[3]);
-    const y = [0, -18, 18, -36, 36].map((d) => y0 + d).find(free);
-    if (y == null) return;
-    placed.push([x - w / 2, y - hgt / 2, x + w / 2, y + hgt / 2]);
+    const w = w1 + w2 + w3, hgt = 16;
+    let x = Math.abs(nx) > 0.6 ? x0 + Math.sign(nx) * (w / 2 + 2) : x0, y;
+    const at = lockedAt(key);
+    if (at) [x, y] = ws(at);
+    else {
+      const free = (yy) => placed.every((r) => x + w / 2 + 3 < r[0] || x - w / 2 - 3 > r[2] || yy + hgt / 2 < r[1] || yy - hgt / 2 > r[3]);
+      const m = key ? remembered(key) : {}, slots = [0, -18, 18, -36, 36];
+      const slot = [...(m.slot != null ? [m.slot] : []), ...slots].find((d) => free(y0 + d));
+      if (slot == null) return;
+      m.slot = slot; y = y0 + slot;
+      autoLock(key, x, y);
+    }
+    const rect = [x - w / 2, y - hgt / 2, x + w / 2, y + hgt / 2];
+    placed.push(rect);
+    if (key) hits.push({ key, rect, center: [x, y], natural: [x0, y0] });
+    if (at) leader(ctx, rect, [x0, y0]);
     let cx = x - w / 2;
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'; ctx.lineWidth = 4;
     ctx.strokeStyle = C.paper; ctx.fillStyle = color;
@@ -515,7 +583,7 @@
       const s1 = ws(P.toWorld(b, -b.L / 2, 0)), s2 = ws(P.toWorld(b, b.L / 2, 0));
       let [nx, ny] = norm(-(s2[1] - s1[1]), s2[0] - s1[0]);
       if (ny < 0 || (ny === 0 && nx > 0)) { nx = -nx; ny = -ny; }
-      note(ctx, 'F', `${num(F)} N`, (s1[0] + s2[0]) / 2 + nx * 14, (s1[1] + s2[1]) / 2 + ny * 14, C.ink, nx);
+      note(ctx, 'F', `${num(F)} N`, (s1[0] + s2[0]) / 2 + nx * 14, (s1[1] + s2[1]) / 2 + ny * 14, C.ink, nx, 'F:' + b.id);
     }
     for (const j of scene.joints) {
       if (!show(j)) continue;
@@ -523,23 +591,23 @@
       if (j.kind === 'pulley') {
         if (!run || !fa(j)) continue;
         const c = ws(P.endWorld(scene, j.p));
-        note(ctx, 'T', `${num(fa(j))} N`, c[0], c[1] + j.r * View.ppm() + 16);
+        note(ctx, 'T', `${num(fa(j))} N`, c[0], c[1] + j.r * View.ppm() + 16, C.ink, 0, 'F:' + j.id);
         continue;
       }
       if (j.kind === 'pivot' || j.kind === 'weld') {
         if (!j.motor) continue;
         const s = ws(P.endWorld(scene, j.a));
-        if (run) note(ctx, 'τ', `${num(Math.abs(ta(j)))} N·m`, s[0], s[1] + 30);
-        else note(ctx, 'n', `${j.motor} rpm`, s[0], s[1] + 30);
+        if (run) note(ctx, 'τ', `${num(Math.abs(ta(j)))} N·m`, s[0], s[1] + 30, C.ink, 0, 'F:' + j.id);
+        else note(ctx, 'n', `${j.motor} rpm`, s[0], s[1] + 30, C.ink, 0, 'F:' + j.id);
         continue;
       }
       if (j.kind === 'load' || j.kind === 'couple') { // the given values, shown even while paused
         const s = j.kind === 'load' ? loadTail(scene, j) : ws(P.endWorld(scene, j.a));
-        if (j.kind === 'load') note(ctx, j.label || 'P', `${num(j.F)} N`, s[0], s[1] - 12);
-        else note(ctx, j.label || 'C', `${num(Math.abs(j.M))} N·m`, s[0], s[1] - 30);
+        if (j.kind === 'load') note(ctx, j.label || 'P', `${num(j.F)} N`, s[0], s[1] - 12, C.ink, 0, 'F:' + j.id);
+        else note(ctx, j.label || 'C', `${num(Math.abs(j.M))} N·m`, s[0], s[1] - 30, C.ink, 0, 'F:' + j.id);
         continue;
       }
-      if (!DRAW[j.kind]) continue;
+      if (!DRAW[j.kind] || j.kind === 'belt') continue;
       let sym = 'F', F;
       if (j.kind === 'spring') F = run ? fa(j) : j.k * (P.jointLength(scene, j) - j.rest); // paused: no damping part
       else if (!run) continue;
@@ -548,14 +616,14 @@
       if (j.kind !== 'spring' && Math.abs(F) < 0.05) continue;
       const [s1, s2, nx, ny] = sides(scene, j, 1);
       const off = j.kind === 'spring' || j.kind === 'damper' ? 22 : j.kind === 'piston' ? 20 : 14;
-      note(ctx, sym, `${num(F)} N`, (s1[0] + s2[0]) / 2 + nx * off, (s1[1] + s2[1]) / 2 + ny * off, C.ink, nx);
+      note(ctx, sym, `${num(F)} N`, (s1[0] + s2[0]) / 2 + nx * off, (s1[1] + s2[1]) / 2 + ny * off, C.ink, nx, 'F:' + j.id);
     }
     for (const b of scene.bodies) { // speeds: weights, plus whatever is selected
       if (b.fixed || !show(b) || (b.kind !== 'disc' && b !== ui.selected)) continue;
       const v = Math.hypot(b.vx, b.vy);
       if (v < 0.01 && b !== ui.selected) continue;
       const s = View.w2s(b.x, b.y), r = (b.kind === 'disc' ? b.r : Math.min(extent(b), 0.6)) * View.ppm();
-      note(ctx, 'v', `${num(v)} m/s`, s[0], s[1] - r - 14);
+      note(ctx, 'v', `${num(v)} m/s`, s[0], s[1] - r - 14, C.ink, 0, 'v:' + b.id);
     }
   }
 
@@ -598,6 +666,14 @@
       bodyPath(ctx, item);
       if (item.kind === 'bar') { ctx.lineWidth = 12; ctx.globalAlpha *= 0.3; } else ctx.lineWidth = 2.5;
       ctx.stroke();
+      if (strong && item.kind === 'poly') { // corner letters, matching the card's sides and angles
+        ctx.globalAlpha = 1;
+        const c = View.w2s(item.x, item.y);
+        item.pts.forEach(([x, y], k) => {
+          const s = ws(P.toWorld(item, x, y)), [ux, uy] = norm(s[0] - c[0], s[1] - c[1]);
+          label(ctx, String.fromCharCode(65 + (k % 26)), s[0] + ux * 13, s[1] + uy * 13, 'center', 13);
+        });
+      }
     } else {
       jointPath(ctx, scene, item);
       const wide = item.kind === 'spring' || item.kind === 'damper' || item.kind === 'piston' || item.kind === 'rod' || item.kind === 'load';
@@ -729,7 +805,7 @@
       const s1 = ws(P.toWorld(b, -b.L / 2, 0)), s2 = ws(P.toWorld(b, b.L / 2, 0));
       let [nx, ny] = norm(-(s2[1] - s1[1]), s2[0] - s1[0]);
       if (ny < 0 || (ny === 0 && nx > 0)) { nx = -nx; ny = -ny; }
-      note(ctx, N > 0 ? 'T' : 'C', `${num(Math.abs(N))} N`, (s1[0] + s2[0]) / 2 + nx * 14, (s1[1] + s2[1]) / 2 + ny * 14, C.accent, nx);
+      note(ctx, N > 0 ? 'T' : 'C', `${num(Math.abs(N))} N`, (s1[0] + s2[0]) / 2 + nx * 14, (s1[1] + s2[1]) / 2 + ny * 14, C.accent, nx, 'TC:' + b.id);
     }
   }
 
@@ -829,7 +905,7 @@
 
   function render(ctx, scene, ui) {
     P.index(scene);
-    placed = []; anchorsDrawn = new Set();
+    placed = []; anchorsDrawn = new Set(); hits = []; cur = ui;
     ctx.fillStyle = C.paper; ctx.fillRect(0, 0, View.W, View.H);
     if (ui.opts.grid) drawGrid(ctx);
     drawTraces(ctx, ui.traces);
@@ -842,7 +918,7 @@
       draw(ctx, b); ctx.restore();
     };
     for (const b of scene.bodies) if (b.kind !== 'bar') popped(b, drawBody);
-    for (const kind of ['spring', 'damper', 'rope', 'rod', 'piston', 'pulley']) {
+    for (const kind of ['belt', 'spring', 'damper', 'rope', 'rod', 'piston', 'pulley']) {
       for (const j of scene.joints) if (j.kind === kind) DRAW[kind](ctx, scene, j);
       if (kind === 'rod') for (const b of scene.bodies) if (b.kind === 'bar') popped(b, drawBar);
     }
@@ -865,6 +941,8 @@
 
   ML.Render = {
     View, readColors, render, jointHandles, colors: () => C, FILLS,
+    // the label under a screen point: { key, center (px), natural (px: where it sits unlocked) }
+    labelAt: (sx, sy) => { for (let i = hits.length - 1; i >= 0; i--) { const r = hits[i].rect; if (sx >= r[0] - 3 && sx <= r[2] + 3 && sy >= r[1] - 3 && sy <= r[3] + 3) return hits[i]; } return null; },
     keyAt: (sx, sy) => (keyRects.find((r) => sx >= r.x0 && sx <= r.x1 && sy >= r.y0 && sy <= r.y1) || {}).code || null,
     // primitives the editor reuses for tool previews
     bodyPath, drawBody, coil, pin, support, dot, label, ws, arrowTo, momentArc,

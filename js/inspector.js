@@ -340,6 +340,7 @@
     const kids = [
       note(`${fmt(b.L)} m long · ${red ? 'massless' : `${fmt(b.mass)} kg`}`),
       field({ id: 'i-len', label: 'Length', unit: 'm', min: 0.05, max: 10, get: () => b.L, set: (v) => setBarLength(b, Math.max(0.03, v)), apply: 'change' }),
+      angleField(b),
       toggle({ id: 'i-ideal', label: 'Massless (textbook rod)', get: () => b.ideal, set: (v) => (b.ideal = v) }),
       note(!b.ideal ? 'Using its real mass.'
         : red ? 'Weightless, like a textbook rod: it only joins two things at its ends.'
@@ -359,6 +360,80 @@
         stat('Kinetic energy', () => (red ? '0 J (massless)' : `${fmt(0.5 * b.mass * speed() ** 2 + 0.5 * (b._I || 0) * b.av * b.av)} J`)),
         red ? null : stat('Weight force', () => `${fmt((b.gscale ?? 1) * b.mass * g(), 1)} N`)));
     return kids;
+  }
+
+  // ---------- exact sizes and angles ----------
+
+  // A part's angle θ, textbook style: degrees anticlockwise from horizontal (it turns about its centre).
+  const angleField = (b) => field({ id: 'i-theta', label: 'Angle θ', unit: '°', min: -180, max: 180, step: 1,
+    get: () => +ML.Forces.deg(-b.a).toFixed(2), set: (v) => (b.a = (-v * Math.PI) / 180), apply: 'change', ends: ['−180°', '+180°'] });
+
+  // A block's width and height: things fixed on it keep their place in proportion (a corner stays a corner).
+  function setBoxSize(b, w, hh) {
+    const fx = w / b.w, fy = hh / b.h;
+    for (const j of A.S.scene.joints) for (const k of ['a', 'b', 'p']) { const e = j[k]; if (e && e.body === b.id) { e.x *= fx; e.y *= fy; } }
+    b.w = w; b.h = hh;
+    if (b.hollow) b.wall = Math.min(b.wall, Math.min(w, hh) / 2 - 0.01);
+  }
+
+  // A shape's corners A, B, C… in the world, its sides and its corner angles (inside the shape).
+  const corner = (k) => String.fromCharCode(65 + (k % 26)) + (k >= 26 ? Math.floor(k / 26) : '');
+  function polyGeom(b) {
+    const V = b.pts.map(([x, y]) => P.toWorld(b, x, y)), n = V.length, sgn = P.polyArea(V) >= 0 ? 1 : -1;
+    const side = (k) => Math.hypot(V[(k + 1) % n][0] - V[k][0], V[(k + 1) % n][1] - V[k][1]);
+    const angle = (k) => {
+      const a = V[(k - 1 + n) % n], o = V[k], c = V[(k + 1) % n], e1 = [o[0] - a[0], o[1] - a[1]], e2 = [c[0] - o[0], c[1] - o[1]];
+      return 180 - (sgn * Math.atan2(e1[0] * e2[1] - e1[1] * e2[0], e1[0] * e2[0] + e1[1] * e2[1]) * 180) / Math.PI;
+    };
+    return { V, n, sgn, side, angle };
+  }
+  // Give a shape new corners (world points). Its centre moves to the new centroid; anything fixed
+  // at a corner follows that corner, anything else stays where it is.
+  function setPolyCorners(b, V) {
+    const ends = [];
+    for (const j of A.S.scene.joints) for (const k of ['a', 'b', 'p']) {
+      const e = j[k];
+      if (!e || e.body !== b.id) continue;
+      ends.push([e, b.pts.findIndex(([x, y]) => Math.hypot(x - e.x, y - e.y) < 1e-6), P.toWorld(b, e.x, e.y)]);
+    }
+    const c = P.polyCentroid(V);
+    b.x = c[0]; b.y = c[1];
+    b.pts = V.map(([x, y]) => P.toLocal(b, x, y));
+    for (const [e, vi, w] of ends) { const q = vi >= 0 ? V[vi] : w; [e.x, e.y] = P.toLocal(b, q[0], q[1]); }
+  }
+  // Side k (from corner k to k+1) gets length L: the corners after it shift along with it.
+  function setPolySide(b, k, L) {
+    const { V } = polyGeom(b), a = V[k], c = V[k + 1], d = Math.hypot(c[0] - a[0], c[1] - a[1]) || 1;
+    const dx = ((c[0] - a[0]) / d) * L - (c[0] - a[0]), dy = ((c[1] - a[1]) / d) * L - (c[1] - a[1]);
+    for (let i = k + 1; i < V.length; i++) { V[i][0] += dx; V[i][1] += dy; }
+    setPolyCorners(b, V);
+  }
+  // The angle at corner k becomes deg: the corners after it swing round it.
+  function setPolyAngle(b, k, deg) {
+    const g = polyGeom(b), V = g.V, o = V[k], phi = ((g.angle(k) - deg) * g.sgn * Math.PI) / 180;
+    for (let i = k + 1; i < V.length; i++) { const [x, y] = P.rotate(phi, V[i][0] - o[0], V[i][1] - o[1]); V[i] = [o[0] + x, o[1] + y]; }
+    setPolyCorners(b, V);
+  }
+  // A number box that applies when you press Enter or leave it (not on every keystroke, so typing
+  // "1.25" doesn't reshape the part through 1 and 1.2 on the way).
+  function exact(label, unit, value, ok, apply) {
+    const box = h('input', { type: 'number', step: 'any', inputmode: 'decimal', value: tidy(value), 'aria-label': `${label} (${unit})` });
+    box.addEventListener('change', () => {
+      const v = parseFloat(box.value);
+      if (!Number.isFinite(v) || !ok(v)) { box.value = tidy(value); A.hint(`That ${unit === '°' ? 'angle' : 'length'} won’t work here.`, 2500); return; }
+      A.checkpoint(); apply(v); A.changed();
+    });
+    return h('div', { class: 'f-top' }, h('label', {}, label), h('span', { class: 'f-num' }, box, h('span', { class: 'unit' }, unit)));
+  }
+  function polyEditor(b) {
+    const g = polyGeom(b), n = g.n, rows = [];
+    for (let k = 0; k < n - 1; k++) {
+      rows.push(exact(`Side ${corner(k)}${corner(k + 1)}`, 'm', g.side(k), (v) => v > 0.005, (v) => setPolySide(b, k, v)));
+      if (k + 1 < n - 1) rows.push(exact(`Angle at ${corner(k + 1)}`, '°', g.angle(k + 1), (v) => v > 0 && v < 360, (v) => setPolyAngle(b, k + 1, v)));
+    }
+    const last = corner(n - 1);
+    return h('div', { class: 'keys' }, h('h3', { class: 'sec' }, 'Sides and corners'), ...rows,
+      note(`These close the shape: side ${last}A = ${fmt(g.side(n - 1))} m, angle at ${last} = ${fmt(g.angle(n - 1), 1)}°, angle at A = ${fmt(g.angle(0), 1)}°. Corner letters show on the drawing.`));
   }
 
   // Resize a circle (radius r, anchor ring as a share of r) so things fixed on its anchor ring
@@ -392,6 +467,11 @@
         toS: (N) => (g() ? N / (b.mass * g()) : 1), fromS: (s) => s * b.mass * g(), ends: ['floats up', 'normal ×3'] }),
     ];
     if (g() === 0) kids.push(note('No gravity right now, so nothing weighs anything.'));
+    if (b.kind === 'box') kids.push(h('div', { class: 'pair' },
+      field({ id: 'i-w', label: 'Width', unit: 'm', min: 0.05, max: 10, get: () => b.w, set: (v) => setBoxSize(b, Math.max(0.02, v), b.h), apply: 'change' }),
+      field({ id: 'i-h', label: 'Height', unit: 'm', min: 0.05, max: 10, get: () => b.h, set: (v) => setBoxSize(b, b.w, Math.max(0.02, v)), apply: 'change' })));
+    kids.push(angleField(b));
+    if (b.kind === 'poly') kids.push(polyEditor(b));
     if (b.kind === 'disc') {
       kids.push(field({ id: 'i-r', label: 'Radius', unit: 'm', min: 0.02, max: 2, get: () => b.r, set: (v) => scaleDisc(b, Math.max(0.01, v), b.ring ?? 1), apply: 'change' }));
       kids.push(choice({ label: 'Anchor points', options: [[0, 'None'], [4, '4'], [8, '8'], [16, '16'], [32, '32']], get: () => b.anchors || 0,
@@ -433,17 +513,19 @@
   // A key button: shows the bound key; tap it, then press the key you want.
   function keyField(j, field, label) {
     const C = Ctl(), code = j[field];
-    const cap = h('button', { type: 'button', class: 'keycap' + (code ? '' : ' none'), 'aria-label': `${label}: ${code ? C.label(code) : 'no key'}. Press to change.` }, code ? C.label(code) : 'none');
+    const shown = code ? code.split(' ').map(C.label).join(' ') : 'none';
+    const cap = h('button', { type: 'button', class: 'keycap' + (code ? '' : ' none'), 'aria-label': `${label}: ${code ? shown : 'no key'}. Press to change.` }, shown);
     cap.addEventListener('click', () => {
       cap.textContent = 'press a key…'; cap.classList.add('listening');
       C.listen((got) => {
-        if (got) { A.checkpoint(); for (const k of ['keyFwd', 'keyRev', 'keyOut', 'keyIn']) if (k !== field && j[k] === got) j[k] = ''; j[field] = got; A.tweak(j); }
-        else { cap.textContent = code ? C.label(code) : 'none'; cap.classList.remove('listening'); }
+        if (got) { A.checkpoint(); for (const k of ['keyFwd', 'keyRev', 'keyOut', 'keyIn']) if (k !== field && j[k]) j[k] = j[k].split(' ').filter((c) => c !== got).join(' '); j[field] = got; A.tweak(j); }
+        else { cap.textContent = shown; cap.classList.remove('listening'); }
       }, (bad) => A.hint(`${bad === 'Space' ? 'Space stays Play / Pause' : C.label(bad) + ' can’t be used'}: pick another key.`, 3000));
     });
     const clear = code ? h('button', { type: 'button', class: 'ib small keyx', 'aria-label': `Remove the ${label.toLowerCase()} key`, onclick: () => { A.checkpoint(); j[field] = ''; A.tweak(j); } }, '×') : null;
-    const others = code ? A.S.scene.joints.filter((k) => k !== j && Ctl().bound(k).some((b) => b.code === code)) : [];
-    const warn = code && C.SHORTCUTS[code] ? `Takes over ${C.label(code)}’s shortcut (${C.SHORTCUTS[code]}).` : '';
+    const codes = code ? code.split(' ') : [];
+    const others = A.S.scene.joints.filter((k) => k !== j && Ctl().bound(k).some((b) => codes.includes(b.code)));
+    const warn = codes.filter((c) => C.SHORTCUTS[c]).map((c) => `Takes over ${C.label(c)}’s shortcut (${C.SHORTCUTS[c]}).`).join(' ');
     const also = others.length ? `Also drives ${others.map((k) => (k.label ? k.label.replace('_', '') : M.kindName(k).toLowerCase())).join(', ')}.` : '';
     return h('div', { class: 'keyrow' }, h('span', {}, label), h('span', { class: 'keyset' }, cap, clear),
       warn || also ? h('small', {}, [warn, also].filter(Boolean).join(' ')) : null);

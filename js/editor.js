@@ -188,6 +188,9 @@
             if (dist(R.ws(p), [sx, sy]) < 9) { op = { type: 'barEnd', b: S.selected, sg, p }; return; }
           }
         }
+        // ...a label: drag it anywhere to lock it there (tap it to select what it labels)
+        const lab = R.labelAt(sx, sy);
+        if (lab) { op = { type: 'label', key: lab.key, dx: sx - lab.center[0], dy: sy - lab.center[1], s0: [sx, sy], natural: lab.natural, moved: false }; canvas.style.cursor = 'grabbing'; return; }
         // 2. ground anchors: drag them about, even while it's running
         const anchors = anchorsAt(sx, sy);
         if (anchors) {
@@ -226,6 +229,11 @@
         if (!op) return;
         const S = A.S, w = V.s2w(sx, sy);
         if (op.type === 'grab' && S.drag) { S.drag.tx = w[0]; S.drag.ty = w[1]; }
+        if (op.type === 'label') {
+          if (!op.moved && dist(op.s0, [sx, sy]) < 4) return;
+          if (!op.moved) { A.checkpoint(); op.moved = true; }
+          A.setLabelPos(op.key, V.s2w(sx - op.dx, sy - op.dy), false);
+        }
         if (op.type === 'pose') {
           if (S.running) { grab(op.drag); S.poseDrag = null; op.type = 'grab'; return; } // pressed Play mid-drag
           if (!op.moved) { A.checkpoint(); op.moved = true; }
@@ -249,6 +257,12 @@
       up() {
         if (!op) return;
         if (op.type === 'grab') A.S.drag = null;
+        if (op.type === 'label') {
+          const scene = A.S.scene, at = scene.labelPos && scene.labelPos[op.key];
+          if (!op.moved) { const item = M.findById(scene, +op.key.split(':')[1]); if (item) A.select(item); }
+          else if (at && dist(R.ws(at), op.natural) < 20) { A.setLabelPos(op.key, null); A.hint('That label follows its part again.', 2500); }
+          else A.setLabelPos(op.key, at);
+        }
         if (op.type === 'pose') { A.S.poseDrag = null; if (op.moved) A.changed(); }
         if (op.type === 'anchor' && op.moved && !A.S.running) A.changed();
         if (op.type === 'handle') moveHandle(op.j, op.which, op.p);
@@ -543,6 +557,10 @@
       ctx.strokeStyle = R.colors().accent; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]);
       for (const s of poly.map(R.ws)) R.dot(ctx, s, 3, R.colors().accent);
       if (poly.length >= 3) { const f = R.ws(poly[0]); ctx.beginPath(); ctx.arc(f[0], f[1], 8, 0, Math.PI * 2); ctx.stroke(); }
+      if (cursor && poly.length) { // the side being drawn: its length and angle (anticlockwise from →)
+        const a = poly[poly.length - 1], b = snap(cursor[0], cursor[1]).p, L = dist(a, b);
+        if (L > 1e-3) previewText(ctx, `${L.toFixed(2)} m at ${Math.round((Math.atan2(a[1] - b[1], b[0] - a[0]) * 180) / Math.PI)}°`, cursor);
+      }
     });
   }
 
@@ -656,6 +674,7 @@
     }
     const t = A.S.tool;
     if (!op && R.keyAt(sx, sy)) { canvas.style.cursor = 'pointer'; A.S.hover = null; return; } // a key cap
+    if (!op && t === 'select' && R.labelAt(sx, sy)) { canvas.style.cursor = 'grab'; A.S.hover = null; return; } // a label you can drag
     if (op || t === 'poly' || t === 'pulley') { tools[t].move(sx, sy); return; }
     // hovering
     if (t === 'select' || t === 'erase' || t === 'camera') {

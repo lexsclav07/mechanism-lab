@@ -156,7 +156,7 @@
   }
 
   const KIND_NAMES = { box: 'Block', disc: 'Weight', poly: 'Shape', bar: 'Rod', pivot: 'Pin', weld: 'Glue', rod: 'Rod', rope: 'Rope',
-    pulley: 'Pulley', spring: 'Spring', damper: 'Damper', piston: 'Piston', slider: 'Track', load: 'Load', couple: 'Moment' };
+    pulley: 'Pulley', spring: 'Spring', damper: 'Damper', piston: 'Piston', slider: 'Track', load: 'Load', couple: 'Moment', belt: 'Belt' };
   // a circle with anchor points (the Circle tool) reads as a circle, a plain one as a weight
   const kindName = (item) => (item.kind === 'pivot' && item.motor ? 'Motor' : item.kind === 'disc' && item.anchors ? 'Circle' : KIND_NAMES[item.kind] || item.kind);
 

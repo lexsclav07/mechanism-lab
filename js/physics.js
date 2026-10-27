@@ -539,6 +539,39 @@
     j._s = frame().s;
   }
 
+  // ---------- belts (CoreXY) ----------
+  // A toothed belt from a motor pulley that moves a carriage along a gantry (slider jx) and the
+  // gantry along its rails (slider jy). Its rule: cx·x + cy·y + r·θ stays constant, where x and y
+  // are how far along each slider they are and θ is the pulley's angle. A CoreXY machine has two:
+  // x + y on one belt, x − y on the other. It's a position constraint like a pin, so the belt
+  // carries real force and the motor has to work to move the head.
+  const sliderPos = (scene, sj) => {
+    const A = bodyOf(scene, sj.a), pA = endWorld(scene, sj.a), pB = endWorld(scene, sj.b), u = rotate(A ? A.a : 0, sj.dir[0], sj.dir[1]);
+    return { s: (pB[0] - pA[0]) * u[0] + (pB[1] - pA[1]) * u[1], u };
+  };
+  function beltParts(scene, j) {
+    const jx = scene.joints.find((k) => k.id === j.sx), jy = scene.joints.find((k) => k.id === j.sy);
+    if (!jx || !jy) return null;
+    const pul = bodyOf(scene, j.a), car = bodyOf(scene, jx.b), gan = bodyOf(scene, jy.b);
+    return pul && car && gan ? { jx, jy, pul, car, gan } : null;
+  }
+  function solveBelt(scene, j, h) {
+    const q = beltParts(scene, j);
+    j._f = 0;
+    if (!q) return;
+    const { jx, jy, pul, car, gan } = q, X = sliderPos(scene, jx), Y = sliderPos(scene, jy);
+    const C = j.cx * X.s + j.cy * Y.s + j.r * pul.a - j.c0;
+    // moving along y moves the gantry and the carriage riding on it together
+    const wx = car._invM, wy = gan.fixed || car.fixed ? 0 : 1 / (gan.mass + car.mass), wt = pul._invI;
+    const w = j.cx * j.cx * wx + j.cy * j.cy * wy + j.r * j.r * wt;
+    if (w <= 0) return;
+    const lam = -C / w, dx = j.cx * lam * wx, dy = j.cy * lam * wy;
+    car.x += dx * X.u[0]; car.y += dx * X.u[1];
+    gan.x += dy * Y.u[0]; gan.y += dy * Y.u[1]; car.x += dy * Y.u[0]; car.y += dy * Y.u[1];
+    pul.a += j.r * lam * wt;
+    j._f = lam / (h * h); // the belt's pull, in newtons
+  }
+
   function solveJoint(scene, j, h, posing) {
     if (j._skip) { j._f = Math.abs(j._skip._f || 0); return; }
     if (j._ideal) { // a massless rod: one distance constraint between the two things it joins
@@ -563,6 +596,8 @@
       solvePiston(scene, j, h);
     } else if (j.kind === 'slider') {
       solveSlider(scene, j, h);
+    } else if (j.kind === 'belt') {
+      solveBelt(scene, j, h);
     }
   }
 
@@ -674,6 +709,15 @@
       end(j.a, [-T * G.g1[0] + ja[0], -T * G.g1[1] + ja[1]], 0, 'pulley', G.pA);
       end(j.b, [-T * G.g2[0] + jb[0], -T * G.g2[1] + jb[1]], 0, 'pulley', G.pB);
       end(j.p, [T * (G.g1[0] + G.g2[0]) - ja[0] - jb[0], T * (G.g1[1] + G.g2[1]) - ja[1] - jb[1]], 0, 'pulley', G.c);
+    } else if (j.kind === 'belt') { // the pulley feels a torque, the head and gantry a pull along their rails
+      const q = beltParts(scene, j), F = j._f || 0;
+      if (q) {
+        const X = sliderPos(scene, q.jx), Y = sliderPos(scene, q.jy), share = q.car.mass / (q.gan.mass + q.car.mass);
+        const fx = j.cx * F, fy = j.cy * F;
+        end(j.a, [0, 0], -j.r * F, 'belt', [q.pul.x, q.pul.y]);
+        end({ body: q.car.id }, [fx * X.u[0] + share * fy * Y.u[0], fx * X.u[1] + share * fy * Y.u[1]], 0, 'belt', [q.car.x, q.car.y]);
+        end({ body: q.gan.id }, [(1 - share) * fy * Y.u[0], (1 - share) * fy * Y.u[1]], 0, 'belt', [q.gan.x, q.gan.y]);
+      }
     } else if (j.kind === 'load') {
       end(j.a, loadVector(scene, j), 0, 'load');
     } else if (j.kind === 'couple') {
