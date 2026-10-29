@@ -15,7 +15,7 @@
     drag: null,      // the hand while running: { body, x, y (grabbed point), tx, ty (pointer), k, c }
     poseDrag: null,  // the same while paused (posing, no forces)
     hand: null, follow: null, followPt: null, // what the renderer draws for those
-    opts: { values: true, labels: true, grid: false, snapGrid: false, comp: true, lockLabels: false, forceNums: true, equations: false },
+    opts: { values: true, labels: true, grid: false, snapGrid: false, comp: true, lockLabels: false, forceNums: true, equations: false, theme: 'light' },
     fbdFor: null,    // the part whose free-body diagram is on (see select)
     probe: null,     // the point last tapped on a part, in its own frame: { body, x, y }
     pairFrom: null,  // "Compare with another part": waiting for the second tap
@@ -354,6 +354,27 @@
     navigator.clipboard.writeText(text).then(() => hint('Equations copied as text.', 2500), () => hint('Copying was blocked by the browser.', 3500));
   }
 
+  // ---------- theme ----------
+
+  // 'light', 'dark', or 'auto' (follow the system). The colours are CSS variables, so setting
+  // data-theme is enough; the canvas reads them again.
+  const dark = matchMedia('(prefers-color-scheme: dark)');
+  function applyTheme() {
+    const t = S.opts.theme, on = t === 'dark' || (t === 'auto' && dark.matches);
+    if (on) document.documentElement.setAttribute('data-theme', 'dark'); else document.documentElement.removeAttribute('data-theme');
+    R.readColors();
+  }
+  function themePicker() {
+    const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Colour theme' });
+    for (const [v, label] of [['light', 'Light'], ['dark', 'Dark'], ['auto', 'Auto']]) {
+      seg.append(el('button', { type: 'button', 'aria-pressed': String(S.opts.theme === v), onclick: () => {
+        S.opts.theme = v; saveOpts(); applyTheme();
+        for (const b of seg.children) b.setAttribute('aria-pressed', String(b.textContent === label));
+      } }, label));
+    }
+    return el('div', { class: 'field', style: 'padding: 6px' }, el('span', { class: 'f-label' }, 'Theme'), seg);
+  }
+
   // ---------- menus ----------
 
   function closePops() {
@@ -420,6 +441,7 @@
   function fillMenu(pop) {
     const item = (label, fn) => el('button', { type: 'button', class: 'tb', onclick: () => { closePops(); fn(); } }, label);
     pop.replaceChildren(
+      themePicker(), el('hr', {}),
       optSwitch('values', 'Live values'), optSwitch('labels', 'Textbook labels'),
       sceneSwitch('reactions', 'Support reactions and rod forces'),
       optSwitch('forceNums', 'Numbers on force arrows'),
@@ -537,10 +559,12 @@
 
   function start(data) {
     canvas = $('stage-canvas'); ctx = canvas.getContext('2d');
-    R.readColors();
     document.fonts && document.fonts.ready.then(() => R.readColors());
 
     try { Object.assign(S.opts, JSON.parse(store.get(OPTS) || '{}')); } catch { /* ignore */ }
+    if (!['light', 'dark', 'auto'].includes(S.opts.theme)) S.opts.theme = 'light';
+    applyTheme(); // after the saved options are read
+    dark.addEventListener('change', () => { if (S.opts.theme === 'auto') applyTheme(); });
     delete S.opts.reactions; delete S.opts.fbd; // these used to be global switches; now they belong to a build / a part
     ML.Inspector.init(App, $('inspector'));
     ML.Rods.init(App);

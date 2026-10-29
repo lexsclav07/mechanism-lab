@@ -64,6 +64,9 @@ type in exactly: the last side and the angles at its two ends close the shape. W
 selected its corners are lettered on the drawing, and while you draw one the Shape tool shows
 each side's length and angle.
 
+**Dark mode.** The ⋯ menu has a Theme switch: Light (the default), Dark, or Auto to follow your
+system. It's remembered in the browser.
+
 **Labels.** Labels and values hold their place and update about ten times a second, so they
 don't jitter. Drag any label with the Grab tool to lock it where you put it (a dotted leader
 points back to its part); drop it back by its part to let it follow again. "Lock labels in place"

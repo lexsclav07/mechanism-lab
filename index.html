@@ -8,6 +8,15 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=STIX+Two+Text:ital,wght@0,400;0,500;1,400;1,500&display=swap">
+<script>
+  // set the theme before anything paints, so a dark page doesn't flash white
+  (function () {
+    try {
+      var t = (JSON.parse(localStorage.getItem('mechlab.opts.v3') || '{}')).theme;
+      if (t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches)) document.documentElement.setAttribute('data-theme', 'dark');
+    } catch (e) { /* no storage: stay light */ }
+  })();
+</script>
 <style>
   /* Layout: a textbook figure you can play with. The drawing fills the page; the controls sit
      on it in thin-ruled boxes like a figure's annotations. Top: title, given values, play
@@ -25,6 +34,15 @@
     --gl: max(16px, env(safe-area-inset-left, 0px));
     --gr: max(16px, env(safe-area-inset-right, 0px));
     color-scheme: light;
+  }
+  /* dark theme: the same tokens, inverted. Chosen in the ⋯ menu (Light, Dark or follow the system). */
+  :root[data-theme="dark"] {
+    --paper: #17181a; --ink: #e8e8e5; --ink-2: #9a9b9e; --rule: #3a3b3e; --soft: #242527;
+    --accent: #7aa2ff;
+    --grid: #1f2022; --grid-major: #2a2b2e;
+    --f-grey: #4a4d51; --f-light: #34363a; --f-white: #17181a; --f-dark: #75797e; --f-ink: #e8e8e5;
+    --lift: 0 1px 2px rgb(0 0 0 / .4), 0 4px 14px rgb(0 0 0 / .4);
+    color-scheme: dark;
   }
   html { box-sizing: border-box; height: 100%; }
   body { margin: 0; }
@@ -65,7 +83,7 @@
   .ib:disabled { opacity: .28; cursor: default; }
   .ib[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
   .play { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 16px 0 12px; border: 0; border-radius: 3px; background: var(--ink); color: var(--paper); font-weight: 600; }
-  .play:hover { background: #333; }
+  .play:hover { background: var(--ink-2); }
   .play svg { width: 15px; height: 15px; fill: currentColor; }
   .tb { height: 36px; padding: 0 10px; border: 0; border-radius: 3px; background: transparent; font-weight: 500; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
   .tb svg { width: 14px; height: 14px; }
