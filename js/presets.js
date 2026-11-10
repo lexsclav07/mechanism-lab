@@ -852,6 +852,137 @@
     return s;
   }
 
+
+  // ---------- physics lab (in the spirit of myphysicslab.com) ----------
+
+  // Pendulum wave: eight pendulums whose lengths are set so that, in 30 s, the first swings 15
+  // times, the next 16, and so on up to 22. They start together, drift apart into travelling
+  // waves and snakes, and line up again at 30 s. T = 30/n and L = g T² / 4π².
+  function pendulumWave() {
+    const s = M.newScene();
+    s.settings.air = 0; s.settings.substeps = 200;
+    const top = -1.2, n = 8, gap = 0.34, x0 = -((n - 1) * gap) / 2, kick = 9 * D;
+    M.addBody(s, { kind: 'box', x: 0, y: top - 0.05, w: n * gap + 0.3, h: 0.1, mass: 10, fixed: true });
+    for (let i = 0; i < n; i++) {
+      const T = 30 / (15 + i), L = (9.81 * T * T) / (4 * Math.PI * Math.PI), x = x0 + i * gap;
+      const bob = M.addBody(s, { kind: 'disc', x: x + L * Math.sin(kick), y: top + L * Math.cos(kick), r: 0.055, mass: 1, color: i % 2 ? 'dark' : 'ink' });
+      M.addJoint(s, { kind: 'rod', a: ground(x, top), b: { body: bob.id, x: 0, y: 0 }, length: L });
+    }
+    return s;
+  }
+
+  // Three point masses on rods: the double pendulum's wilder cousin. The tip draws its path.
+  function triplePendulum() {
+    const s = M.newScene();
+    s.settings.air = 0; s.settings.substeps = 200;
+    const o = [0, -0.9], L = 0.7, ang = [100, 140, 175].map((d) => d * D);
+    let p = o, prev = null;
+    ang.forEach((th, i) => {
+      p = [p[0] + L * Math.sin(th), p[1] + L * Math.cos(th)];
+      const m = M.addBody(s, { kind: 'disc', x: p[0], y: p[1], r: 0.1, mass: 1, color: 'ink', label: `m_${i + 1}`, trace: i === 2 });
+      M.addJoint(s, { kind: 'rod', a: prev ? { body: prev.id, x: 0, y: 0 } : ground(...o), b: { body: m.id, x: 0, y: 0 }, length: L, label: `L_${i + 1}` });
+      prev = m;
+    });
+    return s;
+  }
+
+  // Two real rods (each with its own mass spread along it) instead of point masses on weightless
+  // ones: the "rigid double pendulum". Its moment of inertia matters, so it moves differently.
+  function rigidDoublePendulum() {
+    const s = M.newScene();
+    s.settings.air = 0; s.settings.substeps = 200;
+    const o = [0, -0.9], L = 0.9, t1 = 100 * D, t2 = 160 * D;
+    const A = [o[0] + L * Math.sin(t1), o[1] + L * Math.cos(t1)], B = [A[0] + L * Math.sin(t2), A[1] + L * Math.cos(t2)];
+    const r1 = rod(s, o, A, { ideal: false, mass: 1, label: 'L_1' }), r2 = rod(s, A, B, { ideal: false, mass: 1, label: 'L_2', trace: true });
+    pinRods(s, r1, null, o); pinRods(s, r1, r2, A);
+    return s;
+  }
+
+  // Two masses on two springs, free to swing and stretch in the plane: a double pendulum where
+  // the rods are springs. Chaotic, and the motion mixes swinging with bouncing.
+  function springDoublePendulum() {
+    const s = M.newScene();
+    s.settings.air = 0; s.settings.substeps = 200;
+    const o = [0, -1.3], k = 45, rest = 0.7;
+    const a = M.addBody(s, { kind: 'disc', x: 0.7, y: -0.3, r: 0.1, mass: 1, color: 'ink', label: 'm_1' });
+    const b = M.addBody(s, { kind: 'disc', x: 1.4, y: 0.55, r: 0.1, mass: 1, color: 'ink', label: 'm_2', trace: true });
+    M.addJoint(s, { kind: 'spring', a: ground(...o), b: { body: a.id, x: 0, y: 0 }, k, c: 0, rest, coils: 12, label: 'k_1' });
+    M.addJoint(s, { kind: 'spring', a: { body: a.id, x: 0, y: 0 }, b: { body: b.id, x: 0, y: 0 }, k, c: 0, rest, coils: 12, label: 'k_2' });
+    return s;
+  }
+
+  // Two masses hung one below the other on two springs, moving only up and down. Pull the lower
+  // one and let go: the motion is a mix of two normal modes (in step and out of step).
+  function doubleSpring() {
+    const s = M.newScene();
+    s.settings.air = 0;
+    const k1 = 60, k2 = 40, m1 = 1, m2 = 1, rest = 0.7, top = -1.5, h = 0.24, g = 9.81;
+    M.addBody(s, { kind: 'box', x: 0, y: top - 0.05, w: 1.2, h: 0.1, mass: 10, fixed: true });
+    const y1 = top + rest + ((m1 + m2) * g) / k1 + h / 2, y2 = y1 + h + rest + (m2 * g) / k2 + 0.3; // the lower one pulled down 0.3 m
+    const a = M.addBody(s, { kind: 'box', x: 0, y: y1, w: 0.4, h, mass: m1, label: 'm_1' });
+    const b = M.addBody(s, { kind: 'box', x: 0, y: y2, w: 0.4, h, mass: m2, label: 'm_2', color: 'light' });
+    for (const q of [a, b]) M.addJoint(s, { kind: 'slider', a: ground(0, q.y), b: { body: q.id, x: 0, y: 0 }, dir: [0, 1], lock: true, limits: false, lo: -1, hi: 1 });
+    M.addJoint(s, { kind: 'spring', a: ground(0, top), b: { body: a.id, x: 0, y: -h / 2 }, k: k1, c: 0, rest, coils: 12, label: 'k_1' });
+    M.addJoint(s, { kind: 'spring', a: { body: a.id, x: 0, y: h / 2 }, b: { body: b.id, x: 0, y: -h / 2 }, k: k2, c: 0, rest, coils: 10, label: 'k_2' });
+    return s;
+  }
+
+  // A cart on a spring with a pendulum hanging from it. When the pendulum swings it shakes the
+  // cart, and the cart's motion shakes the pendulum: energy trades between them.
+  function cartPendulum() {
+    const s = M.newScene();
+    s.settings.air = 0; s.settings.substeps = 200;
+    const y = 0, cw = 0.7, ch = 0.3, L = 0.9, k = 30, wall = -1.8, rest = 1.0;
+    M.addBody(s, { kind: 'box', x: -2.0, y: -0.1, w: 0.2, h: 0.9, mass: 10, fixed: true });
+    const track = M.addBody(s, { kind: 'box', x: 0, y: y + ch / 2 + 0.06, w: 4.2, h: 0.08, mass: 10, fixed: true });
+    const cart = M.addBody(s, { kind: 'box', x: wall + rest + cw / 2, y, w: cw, h: ch, mass: 3, label: 'M', color: 'dark' });
+    M.addJoint(s, { kind: 'slider', a: on(s, track, cart.x, y), b: { body: cart.id, x: 0, y: 0 }, dir: [1, 0], lock: true, limits: false, lo: -1.5, hi: 1.5 });
+    M.addJoint(s, { kind: 'spring', a: ground(wall, y), b: { body: cart.id, x: -cw / 2, y: 0 }, k, c: 0, rest, coils: 12, label: 'k' });
+    const th = 55 * D, end = [cart.x + L * Math.sin(th), y + L * Math.cos(th)];
+    const bob = M.addBody(s, { kind: 'disc', x: end[0], y: end[1], r: 0.1, mass: 1, color: 'ink', label: 'm', trace: true });
+    const arm = rod(s, [cart.x, y], end, { label: 'L' });
+    pinRods(s, cart, arm, [cart.x, y]); pinRods(s, arm, bob, end);
+    return s;
+  }
+
+  // A stick hung from a spring at one end and free to turn: it swings, bounces and tumbles
+  // ("dangle stick"). The stick starts tilted 35° with the spring at its resting stretch.
+  function dangleStick() {
+    const s = M.newScene();
+    s.settings.air = 0; s.settings.substeps = 200;
+    const L = 1.2, m = 1, k = 40, rest = 0.5, top = [0, -1.6], tilt = 35 * D;
+    const stretch = (m * 9.81) / k, end = [top[0], top[1] + rest + stretch];
+    const a = Math.PI / 2 - tilt; // local +x points down; tilted by `tilt` from straight down
+    const stick = rod(s, end, [end[0] + L * Math.cos(a), end[1] + L * Math.sin(a)], { ideal: false, mass: m, label: 'L', trace: true });
+    M.addJoint(s, { kind: 'spring', a: ground(...top), b: { body: stick.id, x: -L / 2, y: 0 }, k, c: 0, rest, coils: 12, label: 'k' });
+    return s;
+  }
+
+  // A mass on one spring in a plane, in zero gravity, pushed sideways: it doesn't orbit in a
+  // closed ellipse but in a rosette that slowly turns (Hooke's law with a relaxed length).
+  function springOrbit() {
+    const s = M.newScene();
+    s.settings.air = 0; s.settings.gravity = 0; s.settings.substeps = 200;
+    const bob = M.addBody(s, { kind: 'disc', x: 1.3, y: 0, r: 0.1, mass: 1, color: 'ink', label: 'm', trace: true, vy: 1.7 });
+    M.addJoint(s, { kind: 'spring', a: ground(0, 0), b: { body: bob.id, x: 0, y: 0 }, k: 12, c: 0, rest: 0.6, coils: 16, label: 'k' });
+    return s;
+  }
+
+  // A damped, driven pendulum: a motor crank pulls the bob through a spring about once every
+  // two swings' worth of time. Depending on the push it settles into a steady swing, swings and
+  // rocks irregularly, or flips right over the top.
+  function drivenPendulum() {
+    const s = M.newScene();
+    s.settings.air = 0.15; s.settings.substeps = 200;
+    const o = [0, -1.1], L = 1.0, O = [1.1, -0.2], a = 0.25;
+    const bob = M.addBody(s, { kind: 'disc', x: o[0], y: o[1] + L, r: 0.1, mass: 1, color: 'ink', label: 'm', trace: true });
+    M.addJoint(s, { kind: 'rod', a: ground(...o), b: { body: bob.id, x: 0, y: 0 }, length: L, label: 'L' });
+    const crank = M.addBody(s, { kind: 'disc', x: O[0], y: O[1], r: 0.12, mass: 1, color: 'light' });
+    M.addJoint(s, { kind: 'pivot', a: { body: crank.id, x: 0, y: 0 }, b: ground(...O), motor: 22, torque: 20 });
+    M.addJoint(s, { kind: 'spring', a: { body: crank.id, x: a, y: 0 }, b: { body: bob.id, x: 0, y: 0 }, k: 25, c: 0, rest: 0.9, coils: 12, label: 'k' });
+    return s;
+  }
+
   ML.Presets = [
     { id: 'frame', name: 'The swinging frame', blurb: 'The mechanism from your video.', build: swingingFrame },
     { id: 'atwood', name: 'Atwood machine', blurb: 'Two masses on a pulley. The heavier one wins, slowly.', build: atwood },
@@ -862,6 +993,15 @@
     { id: 'coupledpend', group: 'Vibrations', name: 'Coupled pendulums', blurb: 'Two pendulums and a weak spring: the swing passes from one to the other and back.', build: coupledPendulums },
     { id: 'resonance', group: 'Vibrations', name: 'Resonance', blurb: 'One shaking beam, three springs. Only the one tuned to the shaking builds up big swings.', build: resonance },
     { id: 'suspension', group: 'Vibrations', name: 'Car suspension', blurb: 'A bumpy road, a spring and a damper. Set the damper to 0 to feel the difference.', build: suspension },
+    { id: 'pwave', group: 'Physics lab', name: 'Pendulum wave', blurb: 'Eight pendulums of slightly different lengths start together, drift into waves, and line up again at 30 s.', build: pendulumWave },
+    { id: 'triple', group: 'Physics lab', name: 'Triple pendulum', blurb: 'Three masses on rods. The tip draws its path: chaos, in three links.', build: triplePendulum },
+    { id: 'rigiddouble', group: 'Physics lab', name: 'Rigid double pendulum', blurb: 'Two real rods, not point masses. Compare with the double pendulum.', build: rigidDoublePendulum },
+    { id: 'springdouble', group: 'Physics lab', name: 'Spring double pendulum', blurb: 'A double pendulum whose rods are springs: swinging and bouncing mixed, and chaotic.', build: springDoublePendulum },
+    { id: 'doublespring', group: 'Physics lab', name: 'Double spring (up and down)', blurb: 'Two masses on two springs, up and down only. Pull the lower one: two normal modes mixed.', build: doubleSpring },
+    { id: 'cartpend', group: 'Physics lab', name: 'Cart and pendulum', blurb: 'A cart on a spring with a pendulum hanging from it. Each shakes the other.', build: cartPendulum },
+    { id: 'dangle', group: 'Physics lab', name: 'Dangle stick', blurb: 'A stick hanging from a spring: swinging, bouncing and tumbling all at once.', build: dangleStick },
+    { id: 'springorbit', group: 'Physics lab', name: 'Spring orbit', blurb: 'A mass on one spring in zero gravity, pushed sideways. It traces a slowly turning rosette.', build: springOrbit },
+    { id: 'driven', group: 'Physics lab', name: 'Driven pendulum', blurb: 'A motor crank pulls a damped pendulum through a spring. Change its rpm to find steady, irregular or flipping motion.', build: drivenPendulum },
     { id: 'fourbar', group: 'Linkages', name: 'Four-bar linkage', blurb: 'A motor turns the crank and the coupler draws a loop.', build: fourBar },
     { id: 'rodlinkage', group: 'Linkages', name: 'Rod linkage', blurb: 'Three rods pinned end to end, driven by a motor crank.', build: rodLinkage },
     { id: 'piston', group: 'Linkages', name: 'Crank and slider', blurb: 'A motor-driven wheel pushing a slider, like an engine in reverse.', build: crankPiston },

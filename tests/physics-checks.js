@@ -332,6 +332,44 @@ for (const pr of Presets) {
   check(`preset "${pr.name}": ΣM = I·α, worst error`, worstM, 0, 0.01);
 }
 
+// Physics lab examples.
+{
+  // Pendulum wave: pendulum i swings n = 15 + i times in 30 s (T = 30/n).
+  const s = Presets.find((p) => p.id === 'pwave').build();
+  const bobs = s.bodies.filter((b) => !b.fixed), cross = bobs.map(() => []), prev = bobs.map((b, k) => b.x - (k - 3.5) * 0.34);
+  const x0 = bobs.map((b, i) => b.x - (i - 3.5) * 0.34);
+  for (let i = 0; i < 60 * 30; i++) {
+    P.step(s, 1 / 60);
+    bobs.forEach((b, k) => { const x = b.x - (k - 3.5) * 0.34; if (prev[k] * x < 0) cross[k].push(s.time); prev[k] = x; });
+  }
+  bobs.forEach((b, k) => {
+    const T = (cross[k][cross[k].length - 1] - cross[k][0]) / ((cross[k].length - 1) / 2);
+    check(`pendulum wave ${k + 1}: period (s), want 30 / ${15 + k}`, T, 30 / (15 + k), 0.02);
+  });
+  // after 30 s they line up again (all near the start angle, same side)
+  const spread = Math.max(...bobs.map((b, k) => Math.abs(b.x - (k - 3.5) * 0.34 - x0[k])));
+  check('pendulum wave: back in line after 30 s, worst gap (m)', spread, 0, 0.05);
+}
+{
+  // Spring orbit: the force always points at the anchor, so angular momentum about it is conserved.
+  const s = Presets.find((p) => p.id === 'springorbit').build(), b = s.bodies[0];
+  const L = () => b.x * b.vy - b.y * b.vx, L0 = L();
+  let worst = 0;
+  for (let i = 0; i < 60 * 30; i++) { P.step(s, 1 / 60); worst = Math.max(worst, Math.abs(L() - L0) / Math.abs(L0)); }
+  check('spring orbit: angular momentum drift (share)', worst, 0, 0.01);
+}
+{
+  // Double spring: energy is conserved (no damping, no air).
+  const s = Presets.find((p) => p.id === 'doublespring').build(), [a, b] = s.bodies.filter((x) => !x.fixed);
+  const [s1, s2] = s.joints.filter((j) => j.kind === 'spring');
+  const E = () => [a, b].reduce((e, q) => e + 0.5 * q.mass * (q.vx ** 2 + q.vy ** 2) - q.mass * g * q.y, 0)
+    + [s1, s2].reduce((e, j) => e + 0.5 * j.k * (P.jointLength(s, j) - j.rest) ** 2, 0);
+  P.index(s);
+  const E0 = E(); let worst = 0;
+  for (let i = 0; i < 60 * 20; i++) { P.step(s, 1 / 60); worst = Math.max(worst, Math.abs(E() - E0) / Math.abs(E0)); }
+  check('double spring: energy drift over 20 s (share)', worst, 0, 0.01);
+}
+
 // The equations panel: its written-out terms, with the numbers put in, add up to the same sums
 // (ΣFx, ΣFy, ΣM about G) as the forces themselves, for every part of every example.
 for (const pr of Presets) {

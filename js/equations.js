@@ -117,7 +117,10 @@
       }
       // anything else acts along a direction θ: F cos θ, F sin θ, and moment F·d with d = rx sin θ − ry cos θ
       const mag = Math.hypot(f[0], f[1]);
-      if (mag < 1e-9) continue;
+      if (mag < 1e-9) { // no force, but maybe a turning effect (air drag on a spinning part)
+        if (Math.abs(it.mz) > 1e-9) Mz.push({ s: (it.j ? ctx.sym.get(it.j.id) || it.sym : it.sym) + "'", k: 1, v: it.mz, sign: 1 });
+        continue;
+      }
       const th = Math.atan2(f[1], f[0]), deg = (th * 180) / Math.PI;
       const s = it.j ? ctx.sym.get(it.j.id) || it.sym : it.sym;
       // straight along an axis reads as ±F, not F cos 90°

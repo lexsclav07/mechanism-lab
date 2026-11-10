@@ -16,6 +16,11 @@ spring tuned to the shaking builds up. The "Linkages" examples include Watt's an
 Peaucellier–Lipkin's straight-line linkages, Chebyshev's lambda linkage and a pintograph
 drawing machine. The real machines also include a Whitworth quick-return shaper.
 
+The "Physics lab" examples are in the spirit of myphysicslab.com: a pendulum wave (eight lengths that
+line up again at 30 s), triple and rigid double pendulums, a spring double pendulum, two masses on
+two springs, a cart with a pendulum, a dangle stick, a spring orbit in zero gravity and a driven
+pendulum.
+
 The "Statics" examples are textbook problems with known answers: a simply supported beam, a wall
 bracket held by a cable, a cantilever with a couple, and a Warren truss bridge.
 
