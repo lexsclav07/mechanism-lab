@@ -137,6 +137,14 @@ anticlockwise positive, SI units.
 - **Statics view.** "Support reactions and rod forces" in the ⋯ menu labels every support
   reaction and every rod's T or C on the drawing. It's saved with the build (the statics
   examples have it on), so it doesn't follow you into other builds.
+- **Graph.** The Graph button (or G) opens a drawer that records while the machine runs. Energy
+  mode plots kinetic, gravitational and spring energy and their total, so you can see whether
+  energy is conserved (it is for springs, rods and gravity; motors, pistons, air drag and your hand
+  add or remove some, and it tells you the change). Motion mode plots one quantity (x, y, speed,
+  angle or spin) for a part or for all of them; tap a part and the graph follows it. Hover for the
+  values at a moment. "Copy CSV" puts the whole recording on the clipboard for a spreadsheet.
+  The step button (or the full stop key) advances one frame at a time while paused.
+- **Picture.** "Save picture (PNG)" in the ⋯ menu saves the drawing as an image.
 - **Equations.** Σ Equations (or E) opens a drawer at the bottom with the whole drawing written
   out to solve by hand: what's given, each component's law (W = m·g, F = k(L − L₀)…), and for
   every part ΣF_x = m·a_x, ΣF_y = m·a_y and ΣM_G = I_G·α, first with symbols, then with the
@@ -179,6 +187,7 @@ js/inspector.js     the card for the tapped part
 js/controls.js      keyboard control: key bindings, held keys → motor, piston and winch commands
 js/forces.js        free-body diagrams, reactions, N/V/M inside members (engineering mechanics)
 js/equations.js     the whole drawing written out as equations (the Equations drawer)
+js/scope.js         recorder and graph: energies and motion over time, CSV
 js/presets.js       example scenes
 js/app.js           state, loop, undo, menus, autosave
 tests/physics-checks.js   headless checks against textbook answers

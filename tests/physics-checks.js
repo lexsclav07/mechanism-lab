@@ -1,8 +1,8 @@
 // Physics checks: run the solver headless and compare against textbook answers.
 // Run with:  node tests/physics-checks.js   (no dependencies; exits 1 if anything fails)
 global.window = {};
-for (const f of ['physics', 'model', 'presets', 'forces', 'equations', 'controls']) require(`../js/${f}.js`);
-const { Phys: P, Model: M, Presets, Forces: Fo, Equations: Eq, Controls: K } = window.ML;
+for (const f of ['physics', 'model', 'presets', 'forces', 'equations', 'scope', 'controls']) require(`../js/${f}.js`);
+const { Phys: P, Model: M, Presets, Forces: Fo, Equations: Eq, Scope: Sc, Controls: K } = window.ML;
 
 let failed = 0;
 function check(name, got, want, tol) {
@@ -368,6 +368,24 @@ for (const pr of Presets) {
   const E0 = E(); let worst = 0;
   for (let i = 0; i < 60 * 20; i++) { P.step(s, 1 / 60); worst = Math.max(worst, Math.abs(E() - E0) / Math.abs(E0)); }
   check('double spring: energy drift over 20 s (share)', worst, 0, 0.01);
+}
+
+// The graph recorder: it samples ~30 times a second, total energy of an undamped pendulum stays
+// constant, and a drop from rest turns gravitational energy into kinetic energy joule for joule.
+{
+  const s = Presets.find((p) => p.id === 'doublespring').build();
+  Sc.clear();
+  for (let i = 0; i < 60 * 10; i++) { P.step(s, 1 / 60); Sc.sample(s); }
+  check('graph: samples in 10 s (30 per second)', Sc.count(), 300, 2);
+  const d = Sc.drift();
+  check('graph: double spring total energy drift (share of energy in play)', d.share, 0, 0.01);
+  check('graph: CSV has a header and one line per sample', Sc.csv(s).split('\n').length, 301, 0);
+  Sc.clear(); check('graph: clear empties the recording', Sc.count(), 0, 0);
+  // a free fall: ½mv² gained equals m·g·h lost
+  const f = scene([disc(1, 0, 0, 2)], []); Sc.clear();
+  for (let i = 0; i < 30; i++) { P.step(f, 1 / 60); Sc.sample(f); }
+  const e = Sc.energy(f), fallen = f.bodies[0].y;
+  check('graph: free fall, kinetic energy equals m·g·h', e.ke, 2 * g * fallen, 0.05);
 }
 
 // The equations panel: its written-out terms, with the numbers put in, add up to the same sums

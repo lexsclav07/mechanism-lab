@@ -15,7 +15,7 @@
     drag: null,      // the hand while running: { body, x, y (grabbed point), tx, ty (pointer), k, c }
     poseDrag: null,  // the same while paused (posing, no forces)
     hand: null, follow: null, followPt: null, // what the renderer draws for those
-    opts: { values: true, labels: true, grid: false, snapGrid: false, comp: true, lockLabels: false, forceNums: true, equations: false, theme: 'light' },
+    opts: { values: true, labels: true, grid: false, snapGrid: false, comp: true, lockLabels: false, forceNums: true, equations: false, graph: false, graphMode: 'energy', graphQ: 'x', theme: 'light' },
     fbdFor: null,    // the part whose free-body diagram is on (see select)
     probe: null,     // the point last tapped on a part, in its own frame: { body, x, y }
     pairFrom: null,  // "Compare with another part": waiting for the second tap
@@ -44,6 +44,7 @@
   function autosave() { store.set(STORE, !S.dirty && S.design ? S.design : M.serialize(S.scene)); }
   const saveOpts = () => store.set(OPTS, JSON.stringify(S.opts));
   const clearRecords = () => { S.records = { speed: 0, force: 0 }; };
+  const clearTraces = () => { S.traces.clear(); ML.Scope.clear(); }; // the paths and the graph's recording
 
   // Fix any joints an edit pulled apart (e.g. a resized part), keeping velocities.
   function relax() {
@@ -148,15 +149,23 @@
   // ---------- simulation controls ----------
 
   function play() {
-    if (S.dirty || !S.design) { S.design = M.serialize(S.scene); S.dirty = false; clearRecords(); S.traces.clear(); }
+    if (S.dirty || !S.design) { S.design = M.serialize(S.scene); S.dirty = false; clearRecords(); clearTraces(); }
     S.running = true; syncButtons(); ML.Inspector.refresh();
+  }
+
+  // One frame at a time while paused, for reading the numbers (or the graph) as it goes.
+  function stepOnce() {
+    if (S.running) return;
+    if (S.dirty || !S.design) { S.design = M.serialize(S.scene); S.dirty = false; clearRecords(); clearTraces(); }
+    advance(1 / 60);
+    ML.Inspector.refresh();
   }
 
   function pause() { S.running = false; S.drag = null; syncButtons(); autosave(); ML.Inspector.refresh(); }
 
   function reset() {
     if (!S.design) { hint('Reset takes you back to where you last pressed Play.'); return; }
-    S.running = false; S.traces.clear(); clearRecords();
+    S.running = false; clearTraces(); clearRecords();
     restore(S.design); S.dirty = false;
     syncButtons(); autosave();
   }
@@ -177,7 +186,7 @@
     const pr = ML.Presets.find((p) => p.id === id);
     if (!pr) return;
     if (S.scene.bodies.length) checkpoint();
-    S.running = false; S.traces.clear(); S.design = null;
+    S.running = false; clearTraces(); S.design = null;
     S.scene = M.load(M.serialize(pr.build()));
     for (const b of S.scene.bodies) spawn(b);
     S.selected = null; follow(null); ML.Editor.cancel();
@@ -263,6 +272,7 @@
   function advance(dt) {
     ML.Controls.update(S.scene, dt); // keys held → motor, piston and winch commands
     P.step(S.scene, dt, S.drag);
+    ML.Scope.sample(S.scene);
     if (S.scene.bodies.some((b) => !Number.isFinite(b.x + b.y + b.a))) { // blew up: undo the run
       S.running = false;
       if (S.design) restore(S.design);
@@ -323,6 +333,7 @@
     }
     R.render(ctx, S.scene, S);
     if (S.opts.equations) drawEquations();
+    if (S.opts.graph && (S.freshTags || S.running && frameN % 3 === 0)) drawGraph();
     requestAnimationFrame(frame);
   }
 
@@ -341,10 +352,75 @@
   }
 
   function showEquations(on) {
+    if (on && S.opts.graph) showGraph(false); // the two drawers share the space
     S.opts.equations = on; saveOpts();
     $('eqs').hidden = !on;
     $('eqs-btn').setAttribute('aria-pressed', String(on));
     if (on) { S.an = analysis(); drawEquations(true); }
+  }
+
+  // ---------- the graph drawer ----------
+
+  let graphKey = '', graphHover = null, graphPart = 'all', graphSel = null;
+  const quantities = ML.Scope.QUANTITIES;
+
+  function showGraph(on) {
+    if (on && S.opts.equations) showEquations(false);
+    S.opts.graph = on; saveOpts();
+    $('graph').hidden = !on;
+    $('graph-btn').setAttribute('aria-pressed', String(on));
+    if (on) drawGraph(true);
+  }
+
+  function drawGraph(force) {
+    const scene = S.scene, mode = S.opts.graphMode === 'motion' ? 'motion' : 'energy';
+    for (const b of $('graph-mode').children) b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
+    const bodies = scene.bodies.filter((b) => !b.fixed && !b._red);
+    // follow the selected part
+    const sel = S.selected && M.isBody(S.selected) ? S.selected.id : null;
+    if (sel !== graphSel) { graphSel = sel; if (sel != null && bodies.some((b) => b.id === sel)) graphPart = sel; }
+    if (graphPart !== 'all' && !bodies.some((b) => b.id === graphPart)) graphPart = 'all';
+    // rebuild the controls only when what they list changes
+    const key = mode + '|' + S.opts.graphQ + '|' + bodies.map((b) => b.id + (b.label || '')).join(',');
+    if (key !== graphKey || force) {
+      graphKey = key;
+      $('graph-q').hidden = $('graph-part').hidden = mode !== 'motion';
+      $('graph-q').replaceChildren(...quantities.map((q) => el('button', { type: 'button', 'aria-pressed': String(q.id === S.opts.graphQ), onclick: () => { S.opts.graphQ = q.id; saveOpts(); drawGraph(true); } }, q.name)));
+      const sl = $('graph-part');
+      sl.replaceChildren(el('option', { value: 'all' }, 'All parts'), ...bodies.map((b) => el('option', { value: String(b.id) }, b.label ? ML.Forces.pretty(b.label) : M.kindName(b).toLowerCase() + ' ' + b.id)));
+      sl.value = String(graphPart);
+    }
+    const q = quantities.find((x) => x.id === S.opts.graphQ) || quantities[0];
+    const ls = ML.Scope.lines(scene, mode, q.id, graphPart === 'all' ? 'all' : graphPart);
+    const res = ML.Scope.draw($('graph-canvas'), ls, mode === 'energy' ? 'J' : q.unit, graphHover);
+    const last = (l) => { for (let i = l.v.length - 1; i >= 0; i--) if (l.v[i] != null) return l.v[i]; return null; };
+    const fmtv = (v) => (v == null ? '' : Math.abs(v) >= 100 ? v.toFixed(1) : v.toFixed(3));
+    const keyEl = $('graph-key'), cols = res ? res.cols : [];
+    const head = el('span', { class: 'when' }, res && res.readout ? `t = ${res.readout.t.toFixed(2)} s` : ML.Scope.count() ? 'now' : '');
+    keyEl.replaceChildren(head, ...ls.map((l, i) => {
+      const v = res && res.readout ? res.readout.values[i][1] : last(l);
+      const sw = el('i', {}); sw.style.background = cols[l.color] || 'currentColor';
+      return el('span', {}, sw, l.name, el('b', {}, fmtv(v)));
+    }));
+    const d = ML.Scope.drift();
+    $('graph-note').textContent = mode === 'energy' && d ? `Total changed by ${d.joules >= 0 ? '+' : '−'}${Math.abs(d.joules).toFixed(3)} J (${(Math.abs(d.share) * 100).toFixed(1)}% of the energy in play)` : '';
+  }
+
+  function copyGraph() {
+    if (!ML.Scope.count()) { hint('Nothing recorded yet. Press Play first.', 3000); return; }
+    navigator.clipboard.writeText(ML.Scope.csv(S.scene)).then(() => hint('Recording copied as CSV: paste it into a spreadsheet.', 3500), () => hint('Copying was blocked by the browser.', 3500));
+  }
+
+  // The drawing as a PNG (what's on the canvas now, at the screen's resolution).
+  function savePicture() {
+    canvas.toBlob((blob) => {
+      if (!blob) { hint('Could not make the picture.', 3000); return; }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = 'mechanism-lab.png';
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      hint('Picture saved as mechanism-lab.png.', 3000);
+    }, 'image/png');
   }
 
   function copyEquations() {
@@ -453,6 +529,7 @@
       optSwitch('grid', 'Grid'), optSwitch('snapGrid', 'Snap to grid'),
       el('hr', {}),
       item('Fit everything on screen', fitView),
+      item('Save picture (PNG)', savePicture),
       item('Save or load a build…', openScene),
       item('Clear everything', () => { loadPreset('empty', false); hint('Cleared. Undo brings it back.'); }));
   }
@@ -472,7 +549,7 @@
     $('scene-load').addEventListener('click', () => {
       try {
         const sc = M.load(ta.value);
-        checkpoint(); S.running = false; S.design = null; S.traces.clear();
+        checkpoint(); S.running = false; S.design = null; clearTraces();
         S.scene = sc; S.selected = null; ML.Inspector.refresh(); fitView(); changed();
         dlg.close(); hint('Build loaded.');
       } catch (err) { msg.textContent = `That didn’t load: ${err.message} Paste text copied from this box.`; }
@@ -541,6 +618,8 @@
     else if (k === 's') toggleSlowmo();
     else if (k === 'f') fitView();
     else if (k === 'e') showEquations(!S.opts.equations);
+    else if (k === 'g') showGraph(!S.opts.graph);
+    else if (e.key === '.') stepOnce();
     else if (e.key === 'Escape') { closePops(); select(null); setTool('select'); if (S.follow) follow(null); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && S.selected && S.selected.kind !== 'pair') {
       e.preventDefault(); checkpoint(); M.remove(S.scene, S.selected); select(null); changed();
@@ -576,6 +655,16 @@
     $('reset').addEventListener('click', reset);
     $('slowmo').addEventListener('click', toggleSlowmo);
     $('follow-stop').addEventListener('click', () => follow(null));
+    $('graph-btn').addEventListener('click', () => showGraph(!S.opts.graph));
+    $('graph-close').addEventListener('click', () => showGraph(false));
+    $('graph-csv').addEventListener('click', copyGraph);
+    $('graph-clear').addEventListener('click', () => { ML.Scope.clear(); drawGraph(true); });
+    $('graph-mode').addEventListener('click', (e) => { const m = e.target.dataset && e.target.dataset.mode; if (m) { S.opts.graphMode = m; saveOpts(); drawGraph(true); } });
+    $('graph-part').addEventListener('change', (e) => { graphPart = e.target.value === 'all' ? 'all' : +e.target.value; drawGraph(true); });
+    const gc = $('graph-canvas');
+    gc.addEventListener('pointermove', (e) => { graphHover = e.clientX - gc.getBoundingClientRect().left; if (!S.running) drawGraph(); });
+    gc.addEventListener('pointerleave', () => { graphHover = null; if (!S.running) drawGraph(); });
+    $('step').addEventListener('click', stepOnce);
     $('eqs-btn').addEventListener('click', () => showEquations(!S.opts.equations));
     $('eqs-close').addEventListener('click', () => showEquations(false));
     $('eqs-copy').addEventListener('click', copyEquations);
@@ -608,6 +697,7 @@
       hint('This is the mechanism from your video. Grab any point to pull on it, or take parts from the tray and build your own.', 7000);
     }
     if (S.opts.equations) showEquations(true);
+    else if (S.opts.graph) showGraph(true);
     requestAnimationFrame(frame);
   }
 

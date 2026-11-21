@@ -24,7 +24,7 @@
      One deliberate light look, matching the reference: black ink on white, grey parts. */
   :root {
     --paper: #ffffff; --ink: #161616; --ink-2: #6a6a6a; --rule: #d6d6d3; --soft: #f3f3f1;
-    --accent: #1f4fd6;
+    --accent: #1f4fd6; --s1: #1f4fd6; --s2: #d4560f; --s3: #1b8a4a; --s4: #161616;
     --grid: #f1f1ef; --grid-major: #e4e4e1;
     --f-grey: #cdcfd0; --f-light: #e8e9e9; --f-white: #ffffff; --f-dark: #8c9094; --f-ink: #161616;
     --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -38,7 +38,7 @@
   /* dark theme: the same tokens, inverted. Chosen in the ⋯ menu (Light, Dark or follow the system). */
   :root[data-theme="dark"] {
     --paper: #17181a; --ink: #e8e8e5; --ink-2: #9a9b9e; --rule: #3a3b3e; --soft: #242527;
-    --accent: #7aa2ff;
+    --accent: #7aa2ff; --s1: #7aa2ff; --s2: #ff9a5c; --s3: #5fd08a; --s4: #e8e8e5;
     --grid: #1f2022; --grid-major: #2a2b2e;
     --f-grey: #4a4d51; --f-light: #34363a; --f-white: #17181a; --f-dark: #75797e; --f-ink: #e8e8e5;
     --lift: 0 1px 2px rgb(0 0 0 / .4), 0 4px 14px rgb(0 0 0 / .4);
@@ -216,6 +216,18 @@
   .sigma { font: 600 16px/1 var(--font-math); }
   #eqs-btn[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 
+  /* the graph drawer shares the equations drawer's frame */
+  .graph-body { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 6px 12px 8px; min-height: 0; }
+  #graph-canvas { width: 100%; height: min(200px, 24vh); display: block; touch-action: none; }
+  .graph-key { display: grid; align-content: start; gap: 3px; font: 12px var(--font-num); min-width: 130px; padding-top: 6px; }
+  .graph-key span { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .graph-key i { width: 14px; height: 3px; border-radius: 2px; flex: none; }
+  .graph-key b { margin-left: auto; padding-left: 8px; font-weight: 500; }
+  .graph-key .when { color: var(--ink-2); }
+  #graph .seg button { height: 28px; padding: 0 10px; }
+  #graph select { font: 12.5px var(--font-ui); height: 28px; border: 1px solid var(--rule); border-radius: 3px; background: var(--paper); color: var(--ink); max-width: 140px; }
+  #graph-btn[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+
   /* hint and parts tray */
   .toast { align-self: center; max-width: min(600px, 100%); box-sizing: border-box; padding: 7px 14px; border-radius: 3px; background: var(--ink); color: var(--paper); font-size: 13px; text-align: center; transition: opacity .3s; pointer-events: none; }
   .toast:empty { opacity: 0; }
@@ -254,6 +266,8 @@
     .tgroup > span { display: none; }
     .eqs { max-height: 40vh; }
     .eqs-head small { display: none; }
+    .graph-body { grid-template-columns: 1fr; }
+    .graph-key { grid-auto-flow: column; overflow-x: auto; }
   }
   @media (max-width: 560px) {
     .title h1 { display: none; }
@@ -300,6 +314,9 @@
           <button class="ib" id="slowmo" type="button" aria-pressed="false" aria-label="Slow motion" title="Slow motion, quarter speed (S)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 15c0-4 3.5-7 8-7s7 3 7 6v1H3z"/><path d="M18 13h2a1.5 1.5 0 0 0 0-3h-1"/><path d="M6 15v3M14 15v3"/></svg>
           </button>
+          <button class="ib" id="step" type="button" aria-label="Step one frame" title="Step one frame while paused (.)">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 5v14l10-7z"/><rect x="16.5" y="5" width="2.6" height="14" rx="1"/></svg>
+          </button>
         </div>
         <div class="group box">
           <button class="ib" id="undo" type="button" aria-label="Undo" title="Undo (Ctrl+Z)" disabled>
@@ -319,6 +336,9 @@
           <button class="tb" id="eqs-btn" type="button" aria-pressed="false" aria-controls="eqs" title="Equations for the whole drawing (E)">
             <span class="sigma" aria-hidden="true">Σ</span><span class="lbl">Equations</span>
           </button>
+          <button class="tb" id="graph-btn" type="button" aria-pressed="false" aria-controls="graph" title="Graph: energy and motion over time (G)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v16h16"/><path d="m7 15 4-5 3 3 5-7"/></svg><span class="lbl">Graph</span>
+          </button>
           <button class="ib" id="menu-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="menu-pop" aria-label="More">
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
           </button>
@@ -334,6 +354,29 @@
     </div>
 
     <div class="toast" id="hint" role="status"></div>
+
+    <section class="eqs box" id="graph" aria-labelledby="graph-title" hidden>
+      <header class="eqs-head">
+        <h2 id="graph-title">Graph</h2>
+        <div class="seg" id="graph-mode" role="group" aria-label="What to plot">
+          <button type="button" data-mode="energy" aria-pressed="true">Energy</button>
+          <button type="button" data-mode="motion" aria-pressed="false">Motion</button>
+        </div>
+        <div class="seg" id="graph-q" role="group" aria-label="Quantity" hidden></div>
+        <select id="graph-part" aria-label="Part" hidden></select>
+        <small id="graph-note"></small>
+        <span class="grow"></span>
+        <button class="btn" id="graph-csv" type="button">Copy CSV</button>
+        <button class="btn" id="graph-clear" type="button">Clear</button>
+        <button class="ib" id="graph-close" type="button" aria-label="Close graph">
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="graph-body">
+        <canvas id="graph-canvas" aria-label="Graph of the recording"></canvas>
+        <div class="graph-key" id="graph-key"></div>
+      </div>
+    </section>
 
     <section class="eqs box" id="eqs" aria-labelledby="eqs-title" hidden>
       <header class="eqs-head">
@@ -423,6 +466,7 @@
 <script src="js/model.js"></script>
 <script src="js/forces.js"></script>
 <script src="js/equations.js"></script>
+<script src="js/scope.js"></script>
 <script src="js/rods.js"></script>
 <script src="js/controls.js"></script>
 <script src="js/editor.js"></script>
